@@ -27,6 +27,8 @@ namespace cdt::move_tracker
 {
   /// Number of supported Pachner move kinds in three dimensions.
   inline constexpr std::size_t NUMBER_OF_3D_MOVES = 5;
+  /// Number of supported local move kinds in four-dimensional CDT.
+  inline constexpr std::size_t NUMBER_OF_4D_MOVES = 7;
 
   /**
    * \brief The types of 3D ergodic moves
@@ -38,6 +40,21 @@ namespace cdt::move_tracker
     TWO_SIX   = 2,  ///< Replace two tetrahedra with six.
     SIX_TWO   = 3,  ///< Replace six tetrahedra with two.
     FOUR_FOUR = 4   ///< Exchange a causal four-tetrahedron diamond.
+  };
+
+  /**
+   * \brief The supported 4D CDT local moves.
+   */
+  enum class [[nodiscard("This contains data!")]] MoveType4D
+  {
+    TWO_FOUR    = 0,  ///< Insert an edge into a two-simplex sandwich.
+    FOUR_TWO    = 1,  ///< Inverse of TWO_FOUR.
+    THREE_THREE = 2,  ///< Flip a three-simplex causal bipyramid.
+    FOUR_SIX    = 3,  ///< Refine a four-simplex ball into six simplices.
+    SIX_FOUR    = 4,  ///< Inverse of FOUR_SIX.
+    TWO_EIGHT   = 5,  ///< Stellar subdivision of a timelike edge.
+    EIGHT_TWO   = 6,  ///< Inverse of TWO_EIGHT.
+    NO_MOVE     = 7   ///< Sentinel used when no valid proposal exists.
   };
 
   /// @brief Enable direct formatting through fmt/spdlog.
@@ -88,6 +105,54 @@ namespace cdt::move_tracker
     return moves[move_choice];
   }  // move_from_index
 
+  /**
+   * \brief Convert an integer index to MoveType4D.
+   * \param move_choice The zero-based move index
+   * \return The MoveType4D, or std::nullopt when the index is out of range
+   */
+  [[nodiscard]] constexpr auto move_from_index_4d(
+      std::size_t const move_choice) noexcept -> std::optional<MoveType4D>
+  {
+    using enum MoveType4D;
+    constexpr std::array moves{TWO_FOUR,  FOUR_TWO,  THREE_THREE, FOUR_SIX,
+                               SIX_FOUR,  TWO_EIGHT, EIGHT_TWO};
+    static_assert(moves.size() == NUMBER_OF_4D_MOVES);
+    if (move_choice >= moves.size()) { return std::nullopt; }
+    return moves[move_choice];
+  }  // move_from_index_4d
+
+  /**
+   * \brief Convert an integer to a 4D move.
+   * \param move_choice The move choice integer
+   * \return The 4D move type, or NO_MOVE when out of range
+   */
+  [[nodiscard]] constexpr auto as_move_4d(int const move_choice) noexcept
+      -> MoveType4D
+  {
+    if (move_choice < 0) { return MoveType4D::NO_MOVE; }
+    auto const move =
+        move_from_index_4d(static_cast<std::size_t>(move_choice));
+    return move.value_or(MoveType4D::NO_MOVE);
+  }  // as_move_4d
+
+  /// @brief Return the inverse 4D CDT local move.
+  [[nodiscard]] constexpr auto reverse_move(MoveType4D const move) noexcept
+      -> MoveType4D
+  {
+    switch (move)
+    {
+      case MoveType4D::TWO_FOUR: return MoveType4D::FOUR_TWO;
+      case MoveType4D::FOUR_TWO: return MoveType4D::TWO_FOUR;
+      case MoveType4D::THREE_THREE: return MoveType4D::THREE_THREE;
+      case MoveType4D::FOUR_SIX: return MoveType4D::SIX_FOUR;
+      case MoveType4D::SIX_FOUR: return MoveType4D::FOUR_SIX;
+      case MoveType4D::TWO_EIGHT: return MoveType4D::EIGHT_TWO;
+      case MoveType4D::EIGHT_TWO: return MoveType4D::TWO_EIGHT;
+      case MoveType4D::NO_MOVE: return MoveType4D::NO_MOVE;
+    }
+    return MoveType4D::NO_MOVE;
+  }  // reverse_move
+
   /// @brief Generate a uniformly distributed 3D move from caller-owned RNG.
   /// @tparam Generator Uniform random bit generator type.
   /// @param generator Generator whose state advances during sampling.
@@ -101,6 +166,20 @@ namespace cdt::move_tracker
     auto const move_choice = distribution(generator);
     return *move_from_index(static_cast<std::size_t>(move_choice));
   }  // generate_random_move_3
+
+  /// @brief Generate a uniformly distributed 4D move from caller-owned RNG.
+  /// @tparam Generator Uniform random bit generator type.
+  /// @param generator Generator whose state advances during sampling.
+  /// @return One uniformly sampled MoveType4D.
+  template <std::uniform_random_bit_generator Generator>
+  [[nodiscard]] inline auto generate_random_move_4(Generator& generator)
+      -> MoveType4D
+  {
+    std::uniform_int_distribution<int> distribution{
+        0, static_cast<int>(NUMBER_OF_4D_MOVES - 1)};
+    auto const move_choice = distribution(generator);
+    return *move_from_index_4d(static_cast<std::size_t>(move_choice));
+  }  // generate_random_move_4
 
   /**
    * \brief The data and methods to track ergodic moves
