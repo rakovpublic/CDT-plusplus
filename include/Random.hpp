@@ -188,6 +188,23 @@ namespace cdt
     [[nodiscard]] auto stream() const noexcept -> RandomStream
     { return m_stream; }
 
+    [[nodiscard]] auto engine_state() const -> std::string
+    {
+      std::ostringstream output;
+      output << m_engine;
+      return output.str();
+    }
+
+    void set_engine_state(std::string const& state)
+    {
+      std::istringstream input(state);
+      input >> m_engine;
+      if (!input)
+      {
+        throw std::runtime_error{"Invalid random engine state."};
+      }
+    }
+
     /// @brief Create a fresh reproducible stream from the same root seed.
     /// @param stream PCG sequence selector for the new engine.
     /// @return A new engine at the beginning of the selected sequence.
