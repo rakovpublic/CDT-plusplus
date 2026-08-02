@@ -625,16 +625,19 @@ namespace cdt::four_d
       }
       if (!m_periodic)
       {
+        report.standard_cdt_candidate = false;
         report.errors.emplace_back("Standard CDT candidate requires periodic time.");
       }
       if (!m_closed_s3_slices)
       {
+        report.standard_cdt_candidate = false;
         report.errors.emplace_back("Spatial slices are not marked as closed S3.");
       }
       for (auto const chi : slice_euler_characteristics())
       {
         if (chi != 0)
         {
+          report.standard_cdt_candidate = false;
           report.errors.emplace_back(
               "A spatial slice does not have S3 Euler characteristic.");
           break;
