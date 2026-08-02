@@ -58,7 +58,9 @@ namespace cdt
 
     /// @return The retained root entropy value.
     [[nodiscard]] constexpr auto value() const noexcept -> std::uint64_t
-    { return m_value; }
+    {
+      return m_value;
+    }
 
     /// @param other Seed to compare.
     /// @return Whether both seeds retain the same value.
@@ -80,7 +82,9 @@ namespace cdt
 
     /// @return The retained PCG sequence selector.
     [[nodiscard]] constexpr auto value() const noexcept -> std::uint64_t
-    { return m_value; }
+    {
+      return m_value;
+    }
 
     /// @param other Stream selector to compare.
     /// @return Whether both selectors retain the same value.
@@ -92,27 +96,35 @@ namespace cdt
   /// @return The seed's unsigned representation.
   [[nodiscard]] constexpr auto format_as(RandomSeed const seed) noexcept
       -> std::uint64_t
-  { return seed.value(); }
+  {
+    return seed.value();
+  }
 
   /// @param stream Stream selector to expose to fmt-compatible formatting.
   /// @return The selector's unsigned representation.
   [[nodiscard]] constexpr auto format_as(RandomStream const stream) noexcept
       -> std::uint64_t
-  { return stream.value(); }
+  {
+    return stream.value();
+  }
 
   /// @param output Destination stream.
   /// @param seed Seed to write as an unsigned integer.
   /// @return `output` after insertion.
   inline auto operator<<(std::ostream& output, RandomSeed const seed)
       -> std::ostream&
-  { return output << seed.value(); }
+  {
+    return output << seed.value();
+  }
 
   /// @param output Destination stream.
   /// @param stream Stream selector to write as an unsigned integer.
   /// @return `output` after insertion.
   inline auto operator<<(std::ostream& output, RandomStream const stream)
       -> std::ostream&
-  { return output << stream.value(); }
+  {
+    return output << stream.value();
+  }
 
   namespace random_streams
   {
@@ -172,11 +184,15 @@ namespace cdt
 
     /// @return The minimum value the engine can generate.
     [[nodiscard]] static constexpr auto min() noexcept -> result_type
-    { return pcg64::min(); }
+    {
+      return pcg64::min();
+    }
 
     /// @return The maximum value the engine can generate.
     [[nodiscard]] static constexpr auto max() noexcept -> result_type
-    { return pcg64::max(); }
+    {
+      return pcg64::max();
+    }
 
     /// @return The next value from this engine, advancing its state.
     [[nodiscard]] auto operator()() -> result_type { return m_engine(); }
@@ -186,7 +202,9 @@ namespace cdt
 
     /// @returns The PCG stream selector used by this engine.
     [[nodiscard]] auto stream() const noexcept -> RandomStream
-    { return m_stream; }
+    {
+      return m_stream;
+    }
 
     /// @returns Serialized checkpoint state for resuming this exact stream.
     /// @details This state captures the progressed engine only. The recorded
@@ -204,18 +222,23 @@ namespace cdt
     void set_engine_state(std::string const& state)
     {
       std::istringstream input(state);
-      input >> m_engine;
-      if (!input)
+      auto               restored = m_engine;
+      input >> restored;
+      input >> std::ws;
+      if (!input || !input.eof())
       {
         throw std::runtime_error{"Invalid random engine state."};
       }
+      m_engine = restored;
     }
 
     /// @brief Create a fresh reproducible stream from the same root seed.
     /// @param stream PCG sequence selector for the new engine.
     /// @return A new engine at the beginning of the selected sequence.
     [[nodiscard]] auto split(RandomStream const stream) const -> Random
-    { return Random{m_seed, stream}; }
+    {
+      return Random{m_seed, stream};
+    }
 
     /// @brief Serialize the complete mutable PCG state for exact continuation.
     /// @return Locale-independent PCG engine state.
