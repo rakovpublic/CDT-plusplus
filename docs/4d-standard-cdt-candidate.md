@@ -34,25 +34,33 @@ Sources:
 
 ## Move Catalogue
 
-The source of truth is `Move_catalog_4.hpp`. At present the persistent
-incidence kernel production-enables only the verified `2<->4` pair. The other
-standard 4D Pachner-like CDT move names remain in the public enum for API and
-checkpoint compatibility, but they enumerate zero proposal sites until their
-local subcomplex replacement rules are independently implemented and validated.
+The source of truth is `Move_catalog_4.hpp`. The persistent incidence kernel
+production-enables the seven standard 4D CDT moves described in Goerlich's
+implementation notes: the causal two-slice `2<->4` pair, the self-dual `3->3`
+triangle move, the spatial-slice `4<->6` pair, and the spatial-vertex
+`2<->8` pair. Candidate multiplicities are exact counts of legal local sites in
+the current complex.
 
 | Move | Inverse | Proposal multiplicity | Invariant delta `(N0,N1,N2,N3,N4)` |
 | --- | --- | --- | --- |
 | `TWO_FOUR` | `FOUR_TWO` | legal internal tetrahedral facets | `(0,+1,+4,+5,+2)` |
 | `FOUR_TWO` | `TWO_FOUR` | removable order-four causal edges | `(0,-1,-4,-5,-2)` |
-| `THREE_THREE` | `THREE_THREE` | not implemented | `(0,0,0,0,0)` |
-| `FOUR_SIX` | `SIX_FOUR` | not implemented | `(0,0,0,0,0)` |
-| `SIX_FOUR` | `FOUR_SIX` | not implemented | `(0,0,0,0,0)` |
-| `TWO_EIGHT` | `EIGHT_TWO` | not implemented | `(0,0,0,0,0)` |
-| `EIGHT_TWO` | `TWO_EIGHT` | not implemented | `(0,0,0,0,0)` |
+| `THREE_THREE` | `THREE_THREE` | order-three timelike triangles | `(0,0,0,0,0)` |
+| `FOUR_SIX` | `SIX_FOUR` | order-four spatial triangles | `(0,+1,+4,+5,+2)` |
+| `SIX_FOUR` | `FOUR_SIX` | order-six spatial edges | `(0,-1,-4,-5,-2)` |
+| `TWO_EIGHT` | `EIGHT_TWO` | spatial tetrahedra with up/down apices | `(+1,+6,+14,+15,+6)` |
+| `EIGHT_TWO` | `TWO_EIGHT` | removable order-eight spatial vertices | `(-1,-6,-14,-15,-6)` |
 
 The class-resolved simplex-type deltas `N41/N32/N23/N14` are not fixed by the
 move name alone; they are derived from the selected local site and recorded in
 the accepted `MoveApplication`.
+
+For `T >= 3`, the periodic seed follows the documented minimal `S3 x I`
+sandwich: each time step contributes 5 `{4,1}`, 10 `{3,2}`, 10 `{2,3}`, and
+5 `{1,4}` simplices before the time direction is closed. The degenerate
+two-slice periodic seed uses a non-duplicating product fallback, because the
+standard forward and backward sandwiches identify the same vertex sets when
+there are only two time labels.
 
 ## Detailed Balance
 

@@ -19,42 +19,38 @@ namespace cdt::four_d
 {
   enum class ProposalObservable4D
   {
-    spatial_tetrahedra,
-    timelike_edges,
-    mixed_triangles,
-    timelike_tetrahedra,
-    vertices,
-    three_two_simplices,
-    two_three_simplices,
+    two_four_sites,
+    four_two_sites,
+    three_three_sites,
+    four_six_sites,
+    six_four_sites,
+    two_eight_sites,
+    eight_two_sites,
     none
   };
 
   struct ProposalInventory4D
   {
-    Int_precision      spatial_tetrahedra{0};
-    Int_precision      timelike_edges{0};
-    Int_precision      mixed_triangles{0};
-    Int_precision      timelike_tetrahedra{0};
-    Int_precision      vertices{0};
-    Int_precision      three_two_simplices{0};
-    Int_precision      two_three_simplices{0};
+    Int_precision      two_four_sites{0};
+    Int_precision      four_two_sites{0};
+    Int_precision      three_three_sites{0};
+    Int_precision      four_six_sites{0};
+    Int_precision      six_four_sites{0};
+    Int_precision      two_eight_sites{0};
+    Int_precision      eight_two_sites{0};
 
     [[nodiscard]] auto count(ProposalObservable4D const observable) const
         -> Int_precision
     {
       switch (observable)
       {
-        case ProposalObservable4D::spatial_tetrahedra:
-          return spatial_tetrahedra;
-        case ProposalObservable4D::timelike_edges: return timelike_edges;
-        case ProposalObservable4D::mixed_triangles: return mixed_triangles;
-        case ProposalObservable4D::timelike_tetrahedra:
-          return timelike_tetrahedra;
-        case ProposalObservable4D::vertices: return vertices;
-        case ProposalObservable4D::three_two_simplices:
-          return three_two_simplices;
-        case ProposalObservable4D::two_three_simplices:
-          return two_three_simplices;
+        case ProposalObservable4D::two_four_sites: return two_four_sites;
+        case ProposalObservable4D::four_two_sites: return four_two_sites;
+        case ProposalObservable4D::three_three_sites: return three_three_sites;
+        case ProposalObservable4D::four_six_sites: return four_six_sites;
+        case ProposalObservable4D::six_four_sites: return six_four_sites;
+        case ProposalObservable4D::two_eight_sites: return two_eight_sites;
+        case ProposalObservable4D::eight_two_sites: return eight_two_sites;
         case ProposalObservable4D::none: return 0;
       }
       return 0;
@@ -93,7 +89,7 @@ namespace cdt::four_d
             .applicability =
                 "The shared tetrahedron is internal, causal, and its "
                 "replacement keeps all facets paired in periodic time.",
-            .proposal_observable = spatial_tetrahedra,
+            .proposal_observable = two_four_sites,
             .delta = S4Counts{0, 1, 4, 5, 2, 0, 0, 0, 0, std::nullopt}},
         MoveDescriptor4D{
             .move = FOUR_TWO,
@@ -108,7 +104,7 @@ namespace cdt::four_d
             .applicability =
                 "The edge order is exactly four and the collapse does not "
                 "identify distinct boundary vertices.",
-            .proposal_observable = timelike_edges,
+            .proposal_observable = four_two_sites,
             .delta = S4Counts{0, -1, -4, -5, -2, 0, 0, 0, 0, std::nullopt}},
         MoveDescriptor4D{
             .move = THREE_THREE,
@@ -116,13 +112,14 @@ namespace cdt::four_d
             .name = "THREE_THREE",
             .inverse_name = "THREE_THREE",
             .local_subcomplex =
-                "Not implemented by the persistent 4D incidence kernel.",
+                "Three 4-simplices around an order-three timelike triangle.",
             .replacement =
-                "No replacement is generated until this CDT move is "
-                "independently implemented and validated.",
+                "Replace the timelike triangle by the complementary timelike "
+                "triangle in the same six-vertex ball.",
             .applicability =
-                "No production proposal sites are enumerated for this move.",
-            .proposal_observable = none,
+                "The dual triangle is absent outside the local ball and the "
+                "replacement preserves causal simplex types and gluing.",
+            .proposal_observable = three_three_sites,
             .delta = S4Counts{}},
         MoveDescriptor4D{
             .move = FOUR_SIX,
@@ -130,56 +127,62 @@ namespace cdt::four_d
             .name = "FOUR_SIX",
             .inverse_name = "SIX_FOUR",
             .local_subcomplex =
-                "Not implemented by the persistent 4D incidence kernel.",
+                "Four 4-simplices around an order-four spatial triangle.",
             .replacement =
-                "No replacement is generated until this CDT move is "
-                "independently implemented and validated.",
+                "Replace the spatial triangle by the complementary spatial "
+                "edge, producing six 4-simplices.",
             .applicability =
-                "No production proposal sites are enumerated for this move.",
-            .proposal_observable = none,
-            .delta = S4Counts{}},
+                "The new spatial edge is absent and the four-simplex star has "
+                "one adjacent-time apex on each side of the slice.",
+            .proposal_observable = four_six_sites,
+            .delta = S4Counts{0, 1, 4, 5, 2, 0, 0, 0, 0, std::nullopt}},
         MoveDescriptor4D{
             .move = SIX_FOUR,
             .inverse = FOUR_SIX,
             .name = "SIX_FOUR",
             .inverse_name = "FOUR_SIX",
             .local_subcomplex =
-                "Not implemented by the persistent 4D incidence kernel.",
+                "Six 4-simplices around an order-six spatial edge.",
             .replacement =
-                "No replacement is generated until this CDT move is "
-                "independently implemented and validated.",
+                "Collapse the spatial edge and restore the complementary "
+                "order-four spatial triangle.",
             .applicability =
-                "No production proposal sites are enumerated for this move.",
-            .proposal_observable = none,
-            .delta = S4Counts{}},
+                "The replacement spatial triangle is absent outside the local "
+                "ball and the replacement keeps all facets paired.",
+            .proposal_observable = six_four_sites,
+            .delta = S4Counts{0, -1, -4, -5, -2, 0, 0, 0, 0, std::nullopt}},
         MoveDescriptor4D{
             .move = TWO_EIGHT,
             .inverse = EIGHT_TWO,
             .name = "TWO_EIGHT",
             .inverse_name = "EIGHT_TWO",
             .local_subcomplex =
-                "Not implemented by the persistent 4D incidence kernel.",
+                "Two 4-simplices sharing a spatial tetrahedron.",
             .replacement =
-                "No replacement is generated until this CDT move is "
-                "independently implemented and validated.",
+                "Insert a new spatial vertex in the tetrahedron and replace "
+                "the two cones by eight causal 4-simplices.",
             .applicability =
-                "No production proposal sites are enumerated for this move.",
-            .proposal_observable = none,
-            .delta = S4Counts{}},
+                "The shared tetrahedron has one adjacent-time apex on each "
+                "side and the stellar subdivision preserves the closed slice.",
+            .proposal_observable = two_eight_sites,
+            .delta = S4Counts{1, 6, 14, 15, 6, 0, 0, 0, 0, std::nullopt}},
         MoveDescriptor4D{
             .move = EIGHT_TWO,
             .inverse = TWO_EIGHT,
             .name = "EIGHT_TWO",
             .inverse_name = "TWO_EIGHT",
             .local_subcomplex =
-                "Not implemented by the persistent 4D incidence kernel.",
+                "Eight 4-simplices around a removable order-eight spatial "
+                "vertex.",
             .replacement =
-                "No replacement is generated until this CDT move is "
-                "independently implemented and validated.",
+                "Remove the spatial vertex and restore the two causal "
+                "4-simplices sharing the spatial tetrahedron.",
             .applicability =
-                "No production proposal sites are enumerated for this move.",
-            .proposal_observable = none,
-            .delta = S4Counts{}}};
+                "The vertex star contains only the expected two cone apices "
+                "and the replacement tetrahedron is absent.",
+            .proposal_observable = eight_two_sites,
+            .delta = S4Counts{-1, -6, -14, -15, -6, 0, 0, 0, 0,
+                              std::nullopt}}};
     // clang-format on
   }
 
@@ -197,7 +200,12 @@ namespace cdt::four_d
   {
     using enum move_tracker::MoveType4D;
     return std::array{move_descriptor_4d(TWO_FOUR),
-                      move_descriptor_4d(FOUR_TWO)};
+                      move_descriptor_4d(FOUR_TWO),
+                      move_descriptor_4d(THREE_THREE),
+                      move_descriptor_4d(FOUR_SIX),
+                      move_descriptor_4d(SIX_FOUR),
+                      move_descriptor_4d(TWO_EIGHT),
+                      move_descriptor_4d(EIGHT_TWO)};
   }
 
   [[nodiscard]] constexpr auto reversed_delta(S4Counts const& delta) -> S4Counts

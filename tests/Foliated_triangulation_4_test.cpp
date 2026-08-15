@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -30,6 +31,38 @@ namespace
     simplex.type     = type;
     return simplex;
   }
+
+  [[nodiscard]] auto state_with_four_six_site(
+      FoliatedTriangulation4 const& seed)
+      -> std::optional<FoliatedTriangulation4>
+  {
+    auto const first_sites =
+        seed.candidate_multiplicity(move_tracker::MoveType4D::TWO_EIGHT);
+    for (auto first_site = std::size_t{0};
+         first_site < static_cast<std::size_t>(first_sites); ++first_site)
+    {
+      auto first = seed;
+      if (!first.apply_move(move_tracker::MoveType4D::TWO_EIGHT, first_site))
+      {
+        continue;
+      }
+      auto const second_sites =
+          first.candidate_multiplicity(move_tracker::MoveType4D::TWO_EIGHT);
+      for (auto second_site = std::size_t{0};
+           second_site < static_cast<std::size_t>(second_sites); ++second_site)
+      {
+        auto second = first;
+        if (second.apply_move(move_tracker::MoveType4D::TWO_EIGHT,
+                              second_site) &&
+            second.candidate_multiplicity(move_tracker::MoveType4D::FOUR_SIX) >
+                0)
+        {
+          return second;
+        }
+      }
+    }
+    return std::nullopt;
+  }
 }  // namespace
 
 TEST_CASE("Persistent 4D periodic S3xS1 seed validates")
@@ -46,12 +79,12 @@ TEST_CASE("Persistent 4D periodic S3xS1 seed validates")
   CHECK(triangulation.has_closed_s3_slices());
   CHECK(triangulation.is_valid());
   CHECK_EQ(counts.N0, 20);
-  CHECK_EQ(counts.N4, 80);
+  CHECK_EQ(counts.N4, 120);
   CHECK_EQ(counts.N4, counts.N41 + counts.N32 + counts.N23 + counts.N14);
-  CHECK_GT(counts.N41, 0);
-  CHECK_GT(counts.N32, 0);
-  CHECK_GT(counts.N23, 0);
-  CHECK_GT(counts.N14, 0);
+  CHECK_EQ(counts.N41, 20);
+  CHECK_EQ(counts.N32, 40);
+  CHECK_EQ(counts.N23, 40);
+  CHECK_EQ(counts.N14, 20);
   CHECK_EQ(triangulation.occupied_temporal_width(), 4);
   for (auto const chi : triangulation.slice_euler_characteristics())
   {
@@ -76,17 +109,40 @@ TEST_CASE("Persistent 4D canonical hash tracks local incidence changes")
   CHECK_FALSE(moved.simplices().empty());
 }
 
-TEST_CASE("Unsupported 4D moves are not advertised as local proposals")
+TEST_CASE("Standard 4D CDT moves are advertised from legal local sites")
 {
   auto triangulation = FoliatedTriangulation4::periodic_seed(3);
-  CHECK_EQ(triangulation.candidate_multiplicity(
-               move_tracker::MoveType4D::THREE_THREE),
+  CHECK_GT(triangulation.candidate_multiplicity(
+               move_tracker::MoveType4D::TWO_FOUR),
            0);
-  CHECK_EQ(
+  CHECK_GT(
       triangulation.candidate_multiplicity(move_tracker::MoveType4D::TWO_EIGHT),
       0);
-  CHECK_FALSE(triangulation.apply_move(move_tracker::MoveType4D::THREE_THREE));
-  CHECK_FALSE(triangulation.apply_move(move_tracker::MoveType4D::TWO_EIGHT));
+
+  auto after_two_four = triangulation;
+  REQUIRE(after_two_four.apply_move(move_tracker::MoveType4D::TWO_FOUR));
+  CHECK_GT(after_two_four.candidate_multiplicity(
+               move_tracker::MoveType4D::FOUR_TWO),
+           0);
+  CHECK_GT(after_two_four.candidate_multiplicity(
+               move_tracker::MoveType4D::THREE_THREE),
+           0);
+
+  auto after_two_eight = triangulation;
+  REQUIRE(after_two_eight.apply_move(move_tracker::MoveType4D::TWO_EIGHT));
+  CHECK_GT(after_two_eight.candidate_multiplicity(
+               move_tracker::MoveType4D::EIGHT_TWO),
+           0);
+
+  auto four_six_state = state_with_four_six_site(triangulation);
+  REQUIRE(four_six_state);
+  CHECK_GT(four_six_state->candidate_multiplicity(
+               move_tracker::MoveType4D::FOUR_SIX),
+           0);
+  REQUIRE(four_six_state->apply_move(move_tracker::MoveType4D::FOUR_SIX));
+  CHECK_GT(four_six_state->candidate_multiplicity(
+               move_tracker::MoveType4D::SIX_FOUR),
+           0);
 }
 
 TEST_CASE("4D time reversal maps profiles and vertex times cyclically")
@@ -142,13 +198,13 @@ TEST_CASE("4D candidate validation is independent from the initializer")
     auto abstract = FoliatedTriangulation4::from_counts_for_validation(
         2, counts, FoliatedTriangulation4::Profile{1, 1});
     auto const inventory = abstract.proposal_inventory();
-    CHECK_EQ(inventory.spatial_tetrahedra, 0);
-    CHECK_EQ(inventory.timelike_edges, 0);
-    CHECK_EQ(inventory.mixed_triangles, 0);
-    CHECK_EQ(inventory.timelike_tetrahedra, 0);
-    CHECK_EQ(inventory.vertices, 0);
-    CHECK_EQ(inventory.three_two_simplices, 0);
-    CHECK_EQ(inventory.two_three_simplices, 0);
+    CHECK_EQ(inventory.two_four_sites, 0);
+    CHECK_EQ(inventory.four_two_sites, 0);
+    CHECK_EQ(inventory.three_three_sites, 0);
+    CHECK_EQ(inventory.four_six_sites, 0);
+    CHECK_EQ(inventory.six_four_sites, 0);
+    CHECK_EQ(inventory.two_eight_sites, 0);
+    CHECK_EQ(inventory.eight_two_sites, 0);
   }
 
   SUBCASE("class-resolved counts still do not replace local site enumeration")
@@ -158,10 +214,10 @@ TEST_CASE("4D candidate validation is independent from the initializer")
     auto exact            = FoliatedTriangulation4::from_counts_for_validation(
         2, counts, FoliatedTriangulation4::Profile{1, 1});
     auto const exact_inventory = exact.proposal_inventory();
-    CHECK_EQ(exact_inventory.spatial_tetrahedra, 0);
-    CHECK_EQ(exact_inventory.timelike_edges, 0);
-    CHECK_EQ(exact_inventory.mixed_triangles, 0);
-    CHECK_EQ(exact_inventory.timelike_tetrahedra, 0);
+    CHECK_EQ(exact_inventory.two_four_sites, 0);
+    CHECK_EQ(exact_inventory.four_two_sites, 0);
+    CHECK_EQ(exact_inventory.three_three_sites, 0);
+    CHECK_EQ(exact_inventory.four_six_sites, 0);
   }
 
   SUBCASE("negative spatial profile is reported")
@@ -234,7 +290,7 @@ TEST_CASE("4D candidate validation is independent from the initializer")
     CHECK_EQ(invalid_counts.N4, 2);
     CHECK_EQ(invalid_counts.N41, 2);
     REQUIRE(invalid_counts.class_resolved.has_value());
-    CHECK_EQ(invalid.proposal_inventory().spatial_tetrahedra, 0);
+    CHECK_EQ(invalid.proposal_inventory().two_four_sites, 0);
 
     auto const report = invalid.validate();
     CHECK_FALSE(report.valid());

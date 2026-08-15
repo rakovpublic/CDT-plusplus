@@ -81,8 +81,9 @@ namespace cdt::four_d
     using Profile          = std::vector<Int_precision>;
 
    private:
-    using Edge4D  = std::array<VertexId, 2>;
-    using Facet4D = std::array<VertexId, 4>;
+    using Edge4D     = std::array<VertexId, 2>;
+    using Triangle4D = std::array<VertexId, 3>;
+    using Facet4D    = std::array<VertexId, 4>;
 
     struct TwoFourSite
     {
@@ -95,6 +96,41 @@ namespace cdt::four_d
     {
       Edge4D                   edge{};
       std::array<SimplexId, 4> simplex_ids{};
+      Facet4D                  replacement_facet{};
+    };
+
+    struct ThreeThreeSite
+    {
+      Triangle4D               triangle{};
+      std::array<SimplexId, 3> simplex_ids{};
+      Triangle4D               replacement_triangle{};
+    };
+
+    struct FourSixSite
+    {
+      Triangle4D               triangle{};
+      std::array<SimplexId, 4> simplex_ids{};
+      Edge4D                   new_edge{};
+    };
+
+    struct SixFourSite
+    {
+      Edge4D                   edge{};
+      std::array<SimplexId, 6> simplex_ids{};
+      Triangle4D               replacement_triangle{};
+    };
+
+    struct TwoEightSite
+    {
+      Facet4D                  shared_facet{};
+      std::array<SimplexId, 2> simplex_ids{};
+      Int_precision            vertex_time{0};
+    };
+
+    struct EightTwoSite
+    {
+      VertexId                 vertex{0};
+      std::array<SimplexId, 8> simplex_ids{};
       Facet4D                  replacement_facet{};
     };
 
@@ -191,6 +227,12 @@ namespace cdt::four_d
       return vertices;
     }
 
+    [[nodiscard]] static auto sorted_triangle(Triangle4D vertices)
+    {
+      std::ranges::sort(vertices);
+      return vertices;
+    }
+
     [[nodiscard]] static auto sorted_facet(std::array<VertexId, 4> vertices)
     {
       std::ranges::sort(vertices);
@@ -253,11 +295,62 @@ namespace cdt::four_d
              contains_vertex(simplex.vertices, edge[1]);
     }
 
+    [[nodiscard]] auto simplex_contains_triangle(
+        Simplex4D const& simplex, Triangle4D const& triangle) const -> bool
+    {
+      return contains_vertex(simplex.vertices, triangle[0]) &&
+             contains_vertex(simplex.vertices, triangle[1]) &&
+             contains_vertex(simplex.vertices, triangle[2]);
+    }
+
     [[nodiscard]] auto edge_exists(Edge4D const& edge) const -> bool
     {
       return std::ranges::any_of(m_simplices, [&](auto const& simplex) {
         return simplex_contains_edge(simplex, edge);
       });
+    }
+
+    [[nodiscard]] auto edge_exists_outside(
+        Edge4D const& edge, std::set<SimplexId> const& removed_ids) const
+        -> bool
+    {
+      return std::ranges::any_of(m_simplices, [&](auto const& simplex) {
+        return !removed_ids.contains(simplex.id) &&
+               simplex_contains_edge(simplex, edge);
+      });
+    }
+
+    [[nodiscard]] auto triangle_exists_outside(
+        Triangle4D const& triangle, std::set<SimplexId> const& removed_ids)
+        const -> bool
+    {
+      return std::ranges::any_of(m_simplices, [&](auto const& simplex) {
+        return !removed_ids.contains(simplex.id) &&
+               simplex_contains_triangle(simplex, triangle);
+      });
+    }
+
+    template <std::size_t size>
+    [[nodiscard]] auto common_time(std::array<VertexId, size> const& vertices)
+        const -> std::optional<Int_precision>
+    {
+      if (vertices.empty()) { return std::nullopt; }
+      auto const time = vertex_time(vertices.front());
+      if (time < 0) { return std::nullopt; }
+      for (auto const vertex : vertices)
+      {
+        if (vertex_time(vertex) != time) { return std::nullopt; }
+      }
+      return time;
+    }
+
+    [[nodiscard]] auto vertex_order(VertexId const vertex) const
+        -> Int_precision
+    {
+      return static_cast<Int_precision>(std::ranges::count_if(
+          m_simplices, [&](auto const& simplex) {
+            return contains_vertex(simplex.vertices, vertex);
+          }));
     }
 
     [[nodiscard]] auto simplex_key_exists_outside(
@@ -413,11 +506,11 @@ namespace cdt::four_d
       return ProposalInventory4D{
           static_cast<Int_precision>(enumerate_two_four_sites().size()),
           static_cast<Int_precision>(enumerate_four_two_sites().size()),
-          0,
-          0,
-          0,
-          0,
-          0};
+          static_cast<Int_precision>(enumerate_three_three_sites().size()),
+          static_cast<Int_precision>(enumerate_four_six_sites().size()),
+          static_cast<Int_precision>(enumerate_six_four_sites().size()),
+          static_cast<Int_precision>(enumerate_two_eight_sites().size()),
+          static_cast<Int_precision>(enumerate_eight_two_sites().size())};
     }
 
     void refresh_derived_state()
@@ -723,22 +816,696 @@ namespace cdt::four_d
       return sites;
     }
 
-    [[nodiscard]] auto replace_simplices(
-        std::set<SimplexId> const&                  removed_ids,
-        std::vector<std::array<VertexId, 5>> const& replacement) -> bool
+    [[nodiscard]] auto enumerate_three_three_sites() const
+        -> std::vector<ThreeThreeSite>
     {
+      std::map<Triangle4D, std::vector<SimplexId>> incidence;
+      for (auto const& simplex : m_simplices)
+      {
+        for (auto i = 0; i < 5; ++i)
+        {
+          for (auto j = i + 1; j < 5; ++j)
+          {
+            for (auto k = j + 1; k < 5; ++k)
+            {
+              incidence[sorted_triangle(Triangle4D{
+                            simplex.vertices[static_cast<std::size_t>(i)],
+                            simplex.vertices[static_cast<std::size_t>(j)],
+                            simplex.vertices[static_cast<std::size_t>(k)]})]
+                  .push_back(simplex.id);
+            }
+          }
+        }
+      }
+
+      std::vector<ThreeThreeSite> sites;
+      for (auto const& [triangle, simplex_ids] : incidence)
+      {
+        if (simplex_ids.size() != 3) { continue; }
+        if (common_time(triangle)) { continue; }
+
+        std::set<VertexId> union_vertices;
+        auto               star_has_triangle = true;
+        for (auto const id : simplex_ids)
+        {
+          auto const* simplex = simplex_by_id(id);
+          if (simplex == nullptr ||
+              !simplex_contains_triangle(*simplex, triangle))
+          {
+            star_has_triangle = false;
+            break;
+          }
+          union_vertices.insert(simplex->vertices.begin(),
+                                simplex->vertices.end());
+        }
+        if (!star_has_triangle || union_vertices.size() != 6) { continue; }
+
+        Triangle4D replacement_triangle{};
+        auto       out = 0;
+        for (auto const vertex : union_vertices)
+        {
+          if (!contains_vertex(triangle, vertex))
+          {
+            replacement_triangle[static_cast<std::size_t>(out++)] = vertex;
+          }
+        }
+        if (out != 3 || common_time(replacement_triangle)) { continue; }
+        replacement_triangle = sorted_triangle(replacement_triangle);
+
+        auto const removed_ids =
+            std::set<SimplexId>(simplex_ids.begin(), simplex_ids.end());
+        if (triangle_exists_outside(replacement_triangle, removed_ids))
+        {
+          continue;
+        }
+
+        std::set<VertexId> omitted_dual_vertices;
+        auto               star_has_expected_form = true;
+        for (auto const id : simplex_ids)
+        {
+          auto const*             simplex = simplex_by_id(id);
+          auto                    dual_vertices_in_simplex = 0;
+          std::optional<VertexId> omitted;
+          for (auto const vertex : replacement_triangle)
+          {
+            if (contains_vertex(simplex->vertices, vertex))
+            {
+              ++dual_vertices_in_simplex;
+            }
+            else { omitted = vertex; }
+          }
+          if (dual_vertices_in_simplex != 2 || !omitted)
+          {
+            star_has_expected_form = false;
+            break;
+          }
+          omitted_dual_vertices.insert(*omitted);
+        }
+        if (!star_has_expected_form || omitted_dual_vertices.size() != 3)
+        {
+          continue;
+        }
+
+        std::vector<std::array<VertexId, 5>> replacement;
+        replacement.reserve(3);
+        for (auto omitted_vertex : triangle)
+        {
+          std::array<VertexId, 5> vertices{};
+          auto                    vertex_out = 0;
+          for (auto const vertex : replacement_triangle)
+          {
+            vertices[static_cast<std::size_t>(vertex_out++)] = vertex;
+          }
+          for (auto const vertex : triangle)
+          {
+            if (vertex != omitted_vertex)
+            {
+              vertices[static_cast<std::size_t>(vertex_out++)] = vertex;
+            }
+          }
+          replacement.push_back(vertices);
+        }
+        if (!replacement_preserves_valid_complex(removed_ids, replacement))
+        {
+          continue;
+        }
+
+        auto site                  = ThreeThreeSite{};
+        site.triangle              = triangle;
+        site.simplex_ids           = std::array{simplex_ids[0], simplex_ids[1],
+                                      simplex_ids[2]};
+        site.replacement_triangle  = replacement_triangle;
+        sites.push_back(site);
+      }
+      std::ranges::sort(sites, {}, [](auto const& site) {
+        return std::tuple{site.triangle, site.replacement_triangle,
+                          site.simplex_ids};
+      });
+      return sites;
+    }
+
+    [[nodiscard]] auto enumerate_four_six_sites() const
+        -> std::vector<FourSixSite>
+    {
+      std::map<Triangle4D, std::vector<SimplexId>> incidence;
+      for (auto const& simplex : m_simplices)
+      {
+        for (auto i = 0; i < 5; ++i)
+        {
+          for (auto j = i + 1; j < 5; ++j)
+          {
+            for (auto k = j + 1; k < 5; ++k)
+            {
+              incidence[sorted_triangle(Triangle4D{
+                            simplex.vertices[static_cast<std::size_t>(i)],
+                            simplex.vertices[static_cast<std::size_t>(j)],
+                            simplex.vertices[static_cast<std::size_t>(k)]})]
+                  .push_back(simplex.id);
+            }
+          }
+        }
+      }
+
+      std::vector<FourSixSite> sites;
+      for (auto const& [triangle, simplex_ids] : incidence)
+      {
+        if (simplex_ids.size() != 4) { continue; }
+        auto const slice_time = common_time(triangle);
+        if (!slice_time) { continue; }
+
+        std::set<VertexId> union_vertices;
+        auto               star_has_triangle = true;
+        for (auto const id : simplex_ids)
+        {
+          auto const* simplex = simplex_by_id(id);
+          if (simplex == nullptr ||
+              !simplex_contains_triangle(*simplex, triangle))
+          {
+            star_has_triangle = false;
+            break;
+          }
+          union_vertices.insert(simplex->vertices.begin(),
+                                simplex->vertices.end());
+        }
+        if (!star_has_triangle || union_vertices.size() != 7) { continue; }
+
+        std::vector<VertexId> spatial_edge_vertices;
+        std::vector<VertexId> apices;
+        for (auto const vertex : union_vertices)
+        {
+          if (contains_vertex(triangle, vertex)) { continue; }
+          auto const time = vertex_time(vertex);
+          if (time == *slice_time) { spatial_edge_vertices.push_back(vertex); }
+          else if (are_adjacent_times(time, *slice_time))
+          {
+            apices.push_back(vertex);
+          }
+        }
+        if (spatial_edge_vertices.size() != 2 || apices.size() != 2)
+        {
+          continue;
+        }
+        if (m_timeslices > 2 &&
+            vertex_time(apices[0]) == vertex_time(apices[1]))
+        {
+          continue;
+        }
+
+        auto const new_edge =
+            sorted_edge(Edge4D{spatial_edge_vertices[0],
+                               spatial_edge_vertices[1]});
+        auto const removed_ids =
+            std::set<SimplexId>(simplex_ids.begin(), simplex_ids.end());
+        if (edge_exists_outside(new_edge, removed_ids)) { continue; }
+
+        std::set<std::pair<VertexId, VertexId>> edge_apex_pairs;
+        auto                                    star_has_expected_form = true;
+        for (auto const id : simplex_ids)
+        {
+          auto const* simplex = simplex_by_id(id);
+          std::vector<VertexId> edge_vertices_in_simplex;
+          std::vector<VertexId> apices_in_simplex;
+          for (auto const vertex : spatial_edge_vertices)
+          {
+            if (contains_vertex(simplex->vertices, vertex))
+            {
+              edge_vertices_in_simplex.push_back(vertex);
+            }
+          }
+          for (auto const vertex : apices)
+          {
+            if (contains_vertex(simplex->vertices, vertex))
+            {
+              apices_in_simplex.push_back(vertex);
+            }
+          }
+          if (edge_vertices_in_simplex.size() != 1 ||
+              apices_in_simplex.size() != 1)
+          {
+            star_has_expected_form = false;
+            break;
+          }
+          edge_apex_pairs.insert(
+              {edge_vertices_in_simplex.front(), apices_in_simplex.front()});
+        }
+        if (!star_has_expected_form || edge_apex_pairs.size() != 4)
+        {
+          continue;
+        }
+
+        std::vector<std::array<VertexId, 5>> replacement;
+        replacement.reserve(6);
+        for (auto const apex : apices)
+        {
+          for (auto const omitted_vertex : triangle)
+          {
+            std::array<VertexId, 5> vertices{};
+            auto                    out = 0;
+            vertices[static_cast<std::size_t>(out++)] = new_edge[0];
+            vertices[static_cast<std::size_t>(out++)] = new_edge[1];
+            vertices[static_cast<std::size_t>(out++)] = apex;
+            for (auto const vertex : triangle)
+            {
+              if (vertex != omitted_vertex)
+              {
+                vertices[static_cast<std::size_t>(out++)] = vertex;
+              }
+            }
+            replacement.push_back(vertices);
+          }
+        }
+        if (!replacement_preserves_valid_complex(removed_ids, replacement))
+        {
+          continue;
+        }
+
+        auto site         = FourSixSite{};
+        site.triangle     = triangle;
+        site.simplex_ids  = std::array{simplex_ids[0], simplex_ids[1],
+                                      simplex_ids[2], simplex_ids[3]};
+        site.new_edge     = new_edge;
+        sites.push_back(site);
+      }
+      std::ranges::sort(sites, {}, [](auto const& site) {
+        return std::tuple{site.triangle, site.new_edge, site.simplex_ids};
+      });
+      return sites;
+    }
+
+    [[nodiscard]] auto enumerate_six_four_sites() const
+        -> std::vector<SixFourSite>
+    {
+      std::map<Edge4D, std::vector<SimplexId>> incidence;
+      for (auto const& simplex : m_simplices)
+      {
+        for (auto i = 0; i < 5; ++i)
+        {
+          for (auto j = i + 1; j < 5; ++j)
+          {
+            incidence[sorted_edge(Edge4D{
+                          simplex.vertices[static_cast<std::size_t>(i)],
+                          simplex.vertices[static_cast<std::size_t>(j)]})]
+                .push_back(simplex.id);
+          }
+        }
+      }
+
+      std::vector<SixFourSite> sites;
+      for (auto const& [edge, simplex_ids] : incidence)
+      {
+        if (simplex_ids.size() != 6) { continue; }
+        auto const slice_time = common_time(edge);
+        if (!slice_time) { continue; }
+
+        std::set<VertexId> union_vertices;
+        auto               star_has_edge = true;
+        for (auto const id : simplex_ids)
+        {
+          auto const* simplex = simplex_by_id(id);
+          if (simplex == nullptr || !simplex_contains_edge(*simplex, edge))
+          {
+            star_has_edge = false;
+            break;
+          }
+          union_vertices.insert(simplex->vertices.begin(),
+                                simplex->vertices.end());
+        }
+        if (!star_has_edge || union_vertices.size() != 7) { continue; }
+
+        std::vector<VertexId> triangle_vertices;
+        std::vector<VertexId> apices;
+        for (auto const vertex : union_vertices)
+        {
+          if (contains_vertex(edge, vertex)) { continue; }
+          auto const time = vertex_time(vertex);
+          if (time == *slice_time) { triangle_vertices.push_back(vertex); }
+          else if (are_adjacent_times(time, *slice_time))
+          {
+            apices.push_back(vertex);
+          }
+        }
+        if (triangle_vertices.size() != 3 || apices.size() != 2)
+        {
+          continue;
+        }
+        if (m_timeslices > 2 &&
+            vertex_time(apices[0]) == vertex_time(apices[1]))
+        {
+          continue;
+        }
+
+        auto const replacement_triangle =
+            sorted_triangle(Triangle4D{triangle_vertices[0],
+                                       triangle_vertices[1],
+                                       triangle_vertices[2]});
+        auto const removed_ids =
+            std::set<SimplexId>(simplex_ids.begin(), simplex_ids.end());
+        if (triangle_exists_outside(replacement_triangle, removed_ids))
+        {
+          continue;
+        }
+
+        std::set<std::pair<VertexId, VertexId>> omitted_apex_pairs;
+        auto                                    star_has_expected_form = true;
+        for (auto const id : simplex_ids)
+        {
+          auto const*             simplex = simplex_by_id(id);
+          std::optional<VertexId> omitted_triangle_vertex;
+          std::optional<VertexId> apex_in_simplex;
+          auto                    triangle_count = 0;
+          for (auto const vertex : replacement_triangle)
+          {
+            if (contains_vertex(simplex->vertices, vertex)) { ++triangle_count; }
+            else { omitted_triangle_vertex = vertex; }
+          }
+          for (auto const vertex : apices)
+          {
+            if (contains_vertex(simplex->vertices, vertex))
+            {
+              apex_in_simplex = vertex;
+            }
+          }
+          if (triangle_count != 2 || !omitted_triangle_vertex ||
+              !apex_in_simplex)
+          {
+            star_has_expected_form = false;
+            break;
+          }
+          omitted_apex_pairs.insert(
+              {*omitted_triangle_vertex, *apex_in_simplex});
+        }
+        if (!star_has_expected_form || omitted_apex_pairs.size() != 6)
+        {
+          continue;
+        }
+
+        std::vector<std::array<VertexId, 5>> replacement;
+        replacement.reserve(4);
+        for (auto const endpoint : edge)
+        {
+          for (auto const apex : apices)
+          {
+            replacement.push_back(std::array<VertexId, 5>{
+                replacement_triangle[0], replacement_triangle[1],
+                replacement_triangle[2], endpoint, apex});
+          }
+        }
+        if (!replacement_preserves_valid_complex(removed_ids, replacement))
+        {
+          continue;
+        }
+
+        auto site                  = SixFourSite{};
+        site.edge                  = edge;
+        site.simplex_ids           = std::array{simplex_ids[0], simplex_ids[1],
+                                      simplex_ids[2], simplex_ids[3],
+                                      simplex_ids[4], simplex_ids[5]};
+        site.replacement_triangle  = replacement_triangle;
+        sites.push_back(site);
+      }
+      std::ranges::sort(sites, {}, [](auto const& site) {
+        return std::tuple{site.edge, site.replacement_triangle,
+                          site.simplex_ids};
+      });
+      return sites;
+    }
+
+    [[nodiscard]] auto enumerate_two_eight_sites() const
+        -> std::vector<TwoEightSite>
+    {
+      std::map<Facet4D, std::vector<SimplexId>> incidence;
+      for (auto const& simplex : m_simplices)
+      {
+        for (auto omitted = 0; omitted < 5; ++omitted)
+        {
+          incidence[facet_vertices(simplex, omitted)].push_back(simplex.id);
+        }
+      }
+
+      std::vector<TwoEightSite> sites;
+      for (auto const& [facet, simplex_ids] : incidence)
+      {
+        if (simplex_ids.size() != 2) { continue; }
+        auto const slice_time = common_time(facet);
+        if (!slice_time) { continue; }
+
+        std::vector<VertexId> apices;
+        auto                  star_has_facet = true;
+        for (auto const id : simplex_ids)
+        {
+          auto const* simplex = simplex_by_id(id);
+          if (simplex == nullptr)
+          {
+            star_has_facet = false;
+            break;
+          }
+          std::optional<VertexId> apex;
+          for (auto const vertex : simplex->vertices)
+          {
+            if (!contains_vertex(facet, vertex)) { apex = vertex; }
+          }
+          if (!apex || !are_adjacent_times(vertex_time(*apex), *slice_time))
+          {
+            star_has_facet = false;
+            break;
+          }
+          apices.push_back(*apex);
+        }
+        if (!star_has_facet || apices.size() != 2 || apices[0] == apices[1])
+        {
+          continue;
+        }
+        if (m_timeslices > 2 &&
+            vertex_time(apices[0]) == vertex_time(apices[1]))
+        {
+          continue;
+        }
+
+        auto const new_vertex = next_vertex_id();
+        std::vector<std::array<VertexId, 5>> replacement;
+        replacement.reserve(8);
+        for (auto const apex : apices)
+        {
+          for (auto const omitted_vertex : facet)
+          {
+            std::array<VertexId, 5> vertices{};
+            auto                    out = 0;
+            vertices[static_cast<std::size_t>(out++)] = new_vertex;
+            vertices[static_cast<std::size_t>(out++)] = apex;
+            for (auto const vertex : facet)
+            {
+              if (vertex != omitted_vertex)
+              {
+                vertices[static_cast<std::size_t>(out++)] = vertex;
+              }
+            }
+            replacement.push_back(vertices);
+          }
+        }
+
+        auto probe = *this;
+        probe.m_vertices.push_back(Vertex4D{new_vertex, *slice_time});
+        probe.rebuild_vertex_time_cache();
+        auto const removed_ids =
+            std::set<SimplexId>{simplex_ids[0], simplex_ids[1]};
+        if (!probe.replacement_preserves_valid_complex(removed_ids,
+                                                       replacement))
+        {
+          continue;
+        }
+
+        auto site         = TwoEightSite{};
+        site.shared_facet = facet;
+        site.simplex_ids  = std::array{simplex_ids[0], simplex_ids[1]};
+        site.vertex_time  = *slice_time;
+        sites.push_back(site);
+      }
+      std::ranges::sort(sites, {}, [](auto const& site) {
+        return std::tuple{site.shared_facet, site.simplex_ids};
+      });
+      return sites;
+    }
+
+    [[nodiscard]] auto enumerate_eight_two_sites() const
+        -> std::vector<EightTwoSite>
+    {
+      std::map<VertexId, std::vector<SimplexId>> incidence;
+      for (auto const& simplex : m_simplices)
+      {
+        for (auto const vertex : simplex.vertices)
+        {
+          incidence[vertex].push_back(simplex.id);
+        }
+      }
+
+      std::vector<EightTwoSite> sites;
+      for (auto const& [vertex, simplex_ids] : incidence)
+      {
+        if (simplex_ids.size() != 8 || vertex_order(vertex) != 8)
+        {
+          continue;
+        }
+        auto const slice_time = vertex_time(vertex);
+        if (slice_time < 0) { continue; }
+
+        std::set<VertexId> union_vertices;
+        auto               star_has_vertex = true;
+        for (auto const id : simplex_ids)
+        {
+          auto const* simplex = simplex_by_id(id);
+          if (simplex == nullptr || !contains_vertex(simplex->vertices, vertex))
+          {
+            star_has_vertex = false;
+            break;
+          }
+          union_vertices.insert(simplex->vertices.begin(),
+                                simplex->vertices.end());
+        }
+        if (!star_has_vertex || union_vertices.size() != 7) { continue; }
+
+        std::vector<VertexId> facet_vertices;
+        std::vector<VertexId> apices;
+        for (auto const candidate : union_vertices)
+        {
+          if (candidate == vertex) { continue; }
+          auto const time = vertex_time(candidate);
+          if (time == slice_time) { facet_vertices.push_back(candidate); }
+          else if (are_adjacent_times(time, slice_time))
+          {
+            apices.push_back(candidate);
+          }
+        }
+        if (facet_vertices.size() != 4 || apices.size() != 2)
+        {
+          continue;
+        }
+        if (m_timeslices > 2 &&
+            vertex_time(apices[0]) == vertex_time(apices[1]))
+        {
+          continue;
+        }
+
+        auto replacement_facet =
+            sorted_facet(Facet4D{facet_vertices[0], facet_vertices[1],
+                                 facet_vertices[2], facet_vertices[3]});
+        std::set<std::pair<VertexId, VertexId>> omitted_apex_pairs;
+        auto                                    star_has_expected_form = true;
+        for (auto const id : simplex_ids)
+        {
+          auto const*             simplex = simplex_by_id(id);
+          std::optional<VertexId> omitted_facet_vertex;
+          std::optional<VertexId> apex_in_simplex;
+          auto                    facet_count = 0;
+          for (auto const facet_vertex : replacement_facet)
+          {
+            if (contains_vertex(simplex->vertices, facet_vertex))
+            {
+              ++facet_count;
+            }
+            else { omitted_facet_vertex = facet_vertex; }
+          }
+          for (auto const apex : apices)
+          {
+            if (contains_vertex(simplex->vertices, apex))
+            {
+              apex_in_simplex = apex;
+            }
+          }
+          if (facet_count != 3 || !omitted_facet_vertex || !apex_in_simplex)
+          {
+            star_has_expected_form = false;
+            break;
+          }
+          omitted_apex_pairs.insert({*omitted_facet_vertex, *apex_in_simplex});
+        }
+        if (!star_has_expected_form || omitted_apex_pairs.size() != 8)
+        {
+          continue;
+        }
+
+        std::vector<std::array<VertexId, 5>> replacement;
+        replacement.reserve(2);
+        for (auto const apex : apices)
+        {
+          replacement.push_back(std::array<VertexId, 5>{
+              replacement_facet[0], replacement_facet[1],
+              replacement_facet[2], replacement_facet[3], apex});
+        }
+        auto const removed_ids =
+            std::set<SimplexId>(simplex_ids.begin(), simplex_ids.end());
+        if (!replacement_preserves_valid_complex(removed_ids, replacement))
+        {
+          continue;
+        }
+
+        auto site              = EightTwoSite{};
+        site.vertex            = vertex;
+        site.simplex_ids       = std::array{
+            simplex_ids[0], simplex_ids[1], simplex_ids[2], simplex_ids[3],
+            simplex_ids[4], simplex_ids[5], simplex_ids[6], simplex_ids[7]};
+        site.replacement_facet = replacement_facet;
+        sites.push_back(site);
+      }
+      std::ranges::sort(sites, {}, [](auto const& site) {
+        return std::tuple{site.vertex, site.replacement_facet,
+                          site.simplex_ids};
+      });
+      return sites;
+    }
+
+    [[nodiscard]] auto replace_simplices_and_vertices(
+        std::set<SimplexId> const&                  removed_ids,
+        std::vector<std::array<VertexId, 5>> const& replacement,
+        std::vector<Vertex4D> const&                added_vertices = {},
+        std::set<VertexId> const&                   removed_vertices = {})
+        -> bool
+    {
+      auto before = *this;
+      for (auto const& vertex : added_vertices)
+      {
+        if (vertex.time < 0 || vertex.time >= m_timeslices ||
+            m_vertex_times.contains(vertex.id))
+        {
+          *this = before;
+          return false;
+        }
+        m_vertices.push_back(vertex);
+        m_vertex_times[vertex.id] = vertex.time;
+      }
+
       if (!replacement_preserves_valid_complex(removed_ids, replacement))
       {
+        *this = before;
         return false;
       }
 
-      auto             before = *this;
       SimplexContainer updated;
       updated.reserve(m_simplices.size() - removed_ids.size() +
                       replacement.size());
       for (auto const& simplex : m_simplices)
       {
-        if (!removed_ids.contains(simplex.id)) { updated.push_back(simplex); }
+        if (removed_ids.contains(simplex.id)) { continue; }
+        if (std::ranges::any_of(simplex.vertices, [&](auto const vertex) {
+              return removed_vertices.contains(vertex);
+            }))
+        {
+          *this = before;
+          return false;
+        }
+        updated.push_back(simplex);
+      }
+
+      if (!removed_vertices.empty())
+      {
+        auto const erase_begin = std::ranges::remove_if(
+            m_vertices, [&](auto const& vertex) {
+              return removed_vertices.contains(vertex.id);
+            });
+        m_vertices.erase(erase_begin.begin(), erase_begin.end());
+        for (auto const vertex : removed_vertices)
+        {
+          m_vertex_times.erase(vertex);
+        }
       }
 
       auto next_id = next_simplex_id();
@@ -765,6 +1532,13 @@ namespace cdt::four_d
         return false;
       }
       return true;
+    }
+
+    [[nodiscard]] auto replace_simplices(
+        std::set<SimplexId> const&                  removed_ids,
+        std::vector<std::array<VertexId, 5>> const& replacement) -> bool
+    {
+      return replace_simplices_and_vertices(removed_ids, replacement);
     }
 
     [[nodiscard]] auto spacelike_facets_by_slice() const
@@ -1023,51 +1797,81 @@ namespace cdt::four_d
         auto const  next_time = (time + 1) % result.m_timeslices;
         auto const& lower     = slice_vertices[static_cast<std::size_t>(time)];
         auto const& upper = slice_vertices[static_cast<std::size_t>(next_time)];
-        for (auto omitted_base_vertex = 0; omitted_base_vertex < 5;
-             ++omitted_base_vertex)
+
+        auto add_simplex = [&](std::array<VertexId, 5> vertices) {
+          Simplex4D simplex;
+          simplex.id       = next_simplex++;
+          simplex.vertices = vertices;
+          simplex.type     = result.classify_simplex(vertices).value();
+          result.m_simplices.push_back(simplex);
+        };
+
+        if (result.m_timeslices == 2)
         {
-          std::array<int, 4> base{};
-          auto               out = 0;
+          for (auto omitted_base_vertex = 0; omitted_base_vertex < 5;
+               ++omitted_base_vertex)
+          {
+            std::array<int, 4> base{};
+            auto               out = 0;
+            for (auto vertex = 0; vertex < 5; ++vertex)
+            {
+              if (vertex != omitted_base_vertex)
+              {
+                base[static_cast<std::size_t>(out++)] = vertex;
+              }
+            }
+
+            add_simplex(std::array<VertexId, 5>{
+                lower[static_cast<std::size_t>(base[0])],
+                lower[static_cast<std::size_t>(base[1])],
+                lower[static_cast<std::size_t>(base[2])],
+                lower[static_cast<std::size_t>(base[3])],
+                upper[static_cast<std::size_t>(base[3])]});
+            add_simplex(std::array<VertexId, 5>{
+                lower[static_cast<std::size_t>(base[0])],
+                lower[static_cast<std::size_t>(base[1])],
+                lower[static_cast<std::size_t>(base[2])],
+                upper[static_cast<std::size_t>(base[2])],
+                upper[static_cast<std::size_t>(base[3])]});
+            add_simplex(std::array<VertexId, 5>{
+                lower[static_cast<std::size_t>(base[0])],
+                lower[static_cast<std::size_t>(base[1])],
+                upper[static_cast<std::size_t>(base[1])],
+                upper[static_cast<std::size_t>(base[2])],
+                upper[static_cast<std::size_t>(base[3])]});
+            add_simplex(std::array<VertexId, 5>{
+                lower[static_cast<std::size_t>(base[0])],
+                upper[static_cast<std::size_t>(base[0])],
+                upper[static_cast<std::size_t>(base[1])],
+                upper[static_cast<std::size_t>(base[2])],
+                upper[static_cast<std::size_t>(base[3])]});
+          }
+          continue;
+        }
+
+        for (auto mask = 1; mask < (1 << 5) - 1; ++mask)
+        {
+          std::array<VertexId, 5> vertices{};
+          auto                    out         = 0;
+          auto                    lower_count = 0;
           for (auto vertex = 0; vertex < 5; ++vertex)
           {
-            if (vertex != omitted_base_vertex)
+            if ((mask & (1 << vertex)) != 0)
             {
-              base[static_cast<std::size_t>(out++)] = vertex;
+              vertices[static_cast<std::size_t>(out++)] =
+                  lower[static_cast<std::size_t>(vertex)];
+              ++lower_count;
             }
           }
-
-          auto add_simplex = [&](std::array<VertexId, 5> vertices) {
-            Simplex4D simplex;
-            simplex.id       = next_simplex++;
-            simplex.vertices = vertices;
-            simplex.type     = result.classify_simplex(vertices).value();
-            result.m_simplices.push_back(simplex);
-          };
-
-          add_simplex(std::array<VertexId, 5>{
-              lower[static_cast<std::size_t>(base[0])],
-              lower[static_cast<std::size_t>(base[1])],
-              lower[static_cast<std::size_t>(base[2])],
-              lower[static_cast<std::size_t>(base[3])],
-              upper[static_cast<std::size_t>(base[3])]});
-          add_simplex(std::array<VertexId, 5>{
-              lower[static_cast<std::size_t>(base[0])],
-              lower[static_cast<std::size_t>(base[1])],
-              lower[static_cast<std::size_t>(base[2])],
-              upper[static_cast<std::size_t>(base[2])],
-              upper[static_cast<std::size_t>(base[3])]});
-          add_simplex(std::array<VertexId, 5>{
-              lower[static_cast<std::size_t>(base[0])],
-              lower[static_cast<std::size_t>(base[1])],
-              upper[static_cast<std::size_t>(base[1])],
-              upper[static_cast<std::size_t>(base[2])],
-              upper[static_cast<std::size_t>(base[3])]});
-          add_simplex(std::array<VertexId, 5>{
-              lower[static_cast<std::size_t>(base[0])],
-              upper[static_cast<std::size_t>(base[0])],
-              upper[static_cast<std::size_t>(base[1])],
-              upper[static_cast<std::size_t>(base[2])],
-              upper[static_cast<std::size_t>(base[3])]});
+          for (auto vertex = 4; vertex >= 0; --vertex)
+          {
+            if ((mask & (1 << vertex)) == 0)
+            {
+              vertices[static_cast<std::size_t>(out++)] =
+                  upper[static_cast<std::size_t>(4 - vertex)];
+            }
+          }
+          if (lower_count > 0 && lower_count < 5) { add_simplex(vertices); }
         }
       }
 
@@ -1239,6 +2043,18 @@ namespace cdt::four_d
           return static_cast<Int_precision>(enumerate_two_four_sites().size());
         case MoveType4D::FOUR_TWO:
           return static_cast<Int_precision>(enumerate_four_two_sites().size());
+        case MoveType4D::THREE_THREE:
+          return static_cast<Int_precision>(
+              enumerate_three_three_sites().size());
+        case MoveType4D::FOUR_SIX:
+          return static_cast<Int_precision>(enumerate_four_six_sites().size());
+        case MoveType4D::SIX_FOUR:
+          return static_cast<Int_precision>(enumerate_six_four_sites().size());
+        case MoveType4D::TWO_EIGHT:
+          return static_cast<Int_precision>(enumerate_two_eight_sites().size());
+        case MoveType4D::EIGHT_TWO:
+          return static_cast<Int_precision>(
+              enumerate_eight_two_sites().size());
         default: return 0;
       }
     }
@@ -1294,6 +2110,198 @@ namespace cdt::four_d
                                                      site.simplex_ids.end());
         return replace_simplices(
             removed_ids, std::vector{first_replacement, second_replacement});
+      }
+      if (move == MoveType4D::THREE_THREE)
+      {
+        auto const sites = enumerate_three_three_sites();
+        if (site_index >= sites.size()) { return false; }
+        auto const& site = sites[site_index];
+        std::vector<std::array<VertexId, 5>> replacement;
+        replacement.reserve(3);
+        for (auto omitted_vertex : site.triangle)
+        {
+          std::array<VertexId, 5> vertices{};
+          auto                    out = 0;
+          for (auto const vertex : site.replacement_triangle)
+          {
+            vertices[static_cast<std::size_t>(out++)] = vertex;
+          }
+          for (auto const vertex : site.triangle)
+          {
+            if (vertex != omitted_vertex)
+            {
+              vertices[static_cast<std::size_t>(out++)] = vertex;
+            }
+          }
+          replacement.push_back(vertices);
+        }
+        auto const removed_ids = std::set<SimplexId>(
+            site.simplex_ids.begin(), site.simplex_ids.end());
+        return replace_simplices(removed_ids, replacement);
+      }
+      if (move == MoveType4D::FOUR_SIX)
+      {
+        auto const sites = enumerate_four_six_sites();
+        if (site_index >= sites.size()) { return false; }
+        auto const& site = sites[site_index];
+        std::set<VertexId> apices;
+        for (auto const id : site.simplex_ids)
+        {
+          auto const* simplex = simplex_by_id(id);
+          if (simplex == nullptr) { return false; }
+          for (auto const vertex : simplex->vertices)
+          {
+            if (!contains_vertex(site.triangle, vertex) &&
+                !contains_vertex(site.new_edge, vertex))
+            {
+              apices.insert(vertex);
+            }
+          }
+        }
+        if (apices.size() != 2) { return false; }
+
+        std::vector<std::array<VertexId, 5>> replacement;
+        replacement.reserve(6);
+        for (auto const apex : apices)
+        {
+          for (auto const omitted_vertex : site.triangle)
+          {
+            std::array<VertexId, 5> vertices{};
+            auto                    out = 0;
+            vertices[static_cast<std::size_t>(out++)] = site.new_edge[0];
+            vertices[static_cast<std::size_t>(out++)] = site.new_edge[1];
+            vertices[static_cast<std::size_t>(out++)] = apex;
+            for (auto const vertex : site.triangle)
+            {
+              if (vertex != omitted_vertex)
+              {
+                vertices[static_cast<std::size_t>(out++)] = vertex;
+              }
+            }
+            replacement.push_back(vertices);
+          }
+        }
+        auto const removed_ids = std::set<SimplexId>(
+            site.simplex_ids.begin(), site.simplex_ids.end());
+        return replace_simplices(removed_ids, replacement);
+      }
+      if (move == MoveType4D::SIX_FOUR)
+      {
+        auto const sites = enumerate_six_four_sites();
+        if (site_index >= sites.size()) { return false; }
+        auto const& site = sites[site_index];
+        std::set<VertexId> apices;
+        for (auto const id : site.simplex_ids)
+        {
+          auto const* simplex = simplex_by_id(id);
+          if (simplex == nullptr) { return false; }
+          for (auto const vertex : simplex->vertices)
+          {
+            if (!contains_vertex(site.replacement_triangle, vertex) &&
+                !contains_vertex(site.edge, vertex))
+            {
+              apices.insert(vertex);
+            }
+          }
+        }
+        if (apices.size() != 2) { return false; }
+
+        std::vector<std::array<VertexId, 5>> replacement;
+        replacement.reserve(4);
+        for (auto const endpoint : site.edge)
+        {
+          for (auto const apex : apices)
+          {
+            replacement.push_back(std::array<VertexId, 5>{
+                site.replacement_triangle[0], site.replacement_triangle[1],
+                site.replacement_triangle[2], endpoint, apex});
+          }
+        }
+        auto const removed_ids = std::set<SimplexId>(
+            site.simplex_ids.begin(), site.simplex_ids.end());
+        return replace_simplices(removed_ids, replacement);
+      }
+      if (move == MoveType4D::TWO_EIGHT)
+      {
+        auto const sites = enumerate_two_eight_sites();
+        if (site_index >= sites.size()) { return false; }
+        auto const& site       = sites[site_index];
+        auto const  new_vertex = next_vertex_id();
+        std::set<VertexId> apices;
+        for (auto const id : site.simplex_ids)
+        {
+          auto const* simplex = simplex_by_id(id);
+          if (simplex == nullptr) { return false; }
+          for (auto const vertex : simplex->vertices)
+          {
+            if (!contains_vertex(site.shared_facet, vertex))
+            {
+              apices.insert(vertex);
+            }
+          }
+        }
+        if (apices.size() != 2) { return false; }
+
+        std::vector<std::array<VertexId, 5>> replacement;
+        replacement.reserve(8);
+        for (auto const apex : apices)
+        {
+          for (auto const omitted_vertex : site.shared_facet)
+          {
+            std::array<VertexId, 5> vertices{};
+            auto                    out = 0;
+            vertices[static_cast<std::size_t>(out++)] = new_vertex;
+            vertices[static_cast<std::size_t>(out++)] = apex;
+            for (auto const vertex : site.shared_facet)
+            {
+              if (vertex != omitted_vertex)
+              {
+                vertices[static_cast<std::size_t>(out++)] = vertex;
+              }
+            }
+            replacement.push_back(vertices);
+          }
+        }
+        auto const removed_ids =
+            std::set<SimplexId>{site.simplex_ids[0], site.simplex_ids[1]};
+        return replace_simplices_and_vertices(
+            removed_ids, replacement,
+            std::vector<Vertex4D>{Vertex4D{new_vertex, site.vertex_time}});
+      }
+      if (move == MoveType4D::EIGHT_TWO)
+      {
+        auto const sites = enumerate_eight_two_sites();
+        if (site_index >= sites.size()) { return false; }
+        auto const& site = sites[site_index];
+        std::set<VertexId> apices;
+        for (auto const id : site.simplex_ids)
+        {
+          auto const* simplex = simplex_by_id(id);
+          if (simplex == nullptr) { return false; }
+          for (auto const vertex : simplex->vertices)
+          {
+            if (!contains_vertex(site.replacement_facet, vertex) &&
+                vertex != site.vertex)
+            {
+              apices.insert(vertex);
+            }
+          }
+        }
+        if (apices.size() != 2) { return false; }
+
+        std::vector<std::array<VertexId, 5>> replacement;
+        replacement.reserve(2);
+        for (auto const apex : apices)
+        {
+          replacement.push_back(std::array<VertexId, 5>{
+              site.replacement_facet[0], site.replacement_facet[1],
+              site.replacement_facet[2], site.replacement_facet[3], apex});
+        }
+        auto const removed_ids = std::set<SimplexId>(
+            site.simplex_ids.begin(), site.simplex_ids.end());
+        return replace_simplices_and_vertices(
+            removed_ids, replacement, std::vector<Vertex4D>{},
+            std::set<VertexId>{site.vertex});
       }
       return false;
     }
@@ -1375,13 +2383,13 @@ namespace cdt::four_d
           break;
         }
       }
-      if (m_proposal_inventory.spatial_tetrahedra < 0 ||
-          m_proposal_inventory.timelike_edges < 0 ||
-          m_proposal_inventory.mixed_triangles < 0 ||
-          m_proposal_inventory.timelike_tetrahedra < 0 ||
-          m_proposal_inventory.vertices < 0 ||
-          m_proposal_inventory.three_two_simplices < 0 ||
-          m_proposal_inventory.two_three_simplices < 0)
+      if (m_proposal_inventory.two_four_sites < 0 ||
+          m_proposal_inventory.four_two_sites < 0 ||
+          m_proposal_inventory.three_three_sites < 0 ||
+          m_proposal_inventory.four_six_sites < 0 ||
+          m_proposal_inventory.six_four_sites < 0 ||
+          m_proposal_inventory.two_eight_sites < 0 ||
+          m_proposal_inventory.eight_two_sites < 0)
       {
         report.errors.emplace_back("Negative proposal multiplicity found.");
       }

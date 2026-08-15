@@ -2,7 +2,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <expected>
 #include <limits>
+#include <string>
+#include <utility>
 
 #include "Detailed_balance_4.hpp"
 
@@ -16,8 +19,24 @@ TEST_CASE("4D proposal ratio is reversible on a small triangulation")
       moves::apply(triangulation, move_tracker::MoveType4D::TWO_FOUR);
   REQUIRE(forward);
 
-  auto reverse =
-      moves::apply(forward->triangulation, move_tracker::MoveType4D::FOUR_TWO);
+  auto reverse = moves::ExpectedMove{
+      std::unexpected(std::string{"No restoring reverse site found."})};
+  auto const reverse_candidates = forward->triangulation.candidate_multiplicity(
+      move_tracker::MoveType4D::FOUR_TWO);
+  for (auto site = std::size_t{0};
+       site < static_cast<std::size_t>(reverse_candidates); ++site)
+  {
+    auto candidate =
+        moves::apply(forward->triangulation, move_tracker::MoveType4D::FOUR_TWO,
+                     site);
+    if (candidate &&
+        candidate->triangulation.canonical_hash() ==
+            triangulation.canonical_hash())
+    {
+      reverse = std::move(candidate);
+      break;
+    }
+  }
   REQUIRE(reverse);
 
   CHECK_EQ(forward->reverse_candidates, reverse->forward_candidates);
@@ -45,7 +64,8 @@ TEST_CASE("4D detailed balance holds on a small enumerable ensemble")
 {
   auto        triangulation = FoliatedTriangulation4::periodic_seed(3);
   S4Couplings couplings{1.0L, 0.2L, 0.1L, 36, 0.001L};
-  auto        report = verify_detailed_balance(triangulation, couplings, 1);
+  auto        report =
+      verify_detailed_balance(triangulation, couplings, 1, 1.0e-10L, 4096);
   CHECK(report.passed);
   CHECK_FALSE(report.edges.empty());
 }
