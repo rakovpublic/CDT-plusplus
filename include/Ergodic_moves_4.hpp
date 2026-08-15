@@ -3,14 +3,15 @@
 *******************************************************************************/
 
 /// @file Ergodic_moves_4.hpp
-/// @brief Abstract 3+1D CDT move proposals.
+/// @brief Incidence-based 3+1D CDT move proposals.
 
 #ifndef CDT_PLUSPLUS_ERGODIC_MOVES_4_HPP
 #define CDT_PLUSPLUS_ERGODIC_MOVES_4_HPP
 
 #include <expected>
-#include <utility>
+#include <optional>
 #include <string>
+#include <utility>
 
 #include "Foliated_triangulation_4.hpp"
 
@@ -23,22 +24,21 @@ namespace cdt::four_d::moves
     S4Counts                 delta;
     Int_precision            forward_candidates{0};
     Int_precision            reverse_candidates{0};
+    std::size_t              site_index{0};
   };
 
   using ExpectedMove = std::expected<MoveApplication, std::string>;
 
-  [[nodiscard]] inline auto apply(FoliatedTriangulation4 const& before,
-                                  move_tracker::MoveType4D const move)
+  [[nodiscard]] inline auto apply(FoliatedTriangulation4 const&  before,
+                                  move_tracker::MoveType4D const move,
+                                  std::size_t const              site_index = 0)
       -> ExpectedMove
   {
     auto const forward      = before.candidate_multiplicity(move);
     auto const reverse_move = move_tracker::reverse_move(move);
-    if (forward <= 0)
-    {
-      return std::unexpected("4D move is not applicable.");
-    }
+    if (forward <= 0) { return std::unexpected("4D move is not applicable."); }
     auto candidate = before;
-    if (!candidate.apply_move(move))
+    if (!candidate.apply_move(move, site_index))
     {
       return std::unexpected("4D move is not applicable.");
     }
@@ -50,18 +50,19 @@ namespace cdt::four_d::moves
 
     auto const before_counts = before.counts();
     auto const after_counts  = candidate.counts();
-    S4Counts delta{
-        after_counts.N0 - before_counts.N0,
-        after_counts.N1 - before_counts.N1,
-        after_counts.N2 - before_counts.N2,
-        after_counts.N3 - before_counts.N3,
-        after_counts.N4 - before_counts.N4,
-        after_counts.N41 - before_counts.N41,
-        after_counts.N32 - before_counts.N32,
-        after_counts.N23 - before_counts.N23,
-        after_counts.N14 - before_counts.N14};
+    S4Counts   delta{after_counts.N0 - before_counts.N0,
+                   after_counts.N1 - before_counts.N1,
+                   after_counts.N2 - before_counts.N2,
+                   after_counts.N3 - before_counts.N3,
+                   after_counts.N4 - before_counts.N4,
+                   after_counts.N41 - before_counts.N41,
+                   after_counts.N32 - before_counts.N32,
+                   after_counts.N23 - before_counts.N23,
+                   after_counts.N14 - before_counts.N14,
+                   std::nullopt};
 
-    return MoveApplication{std::move(candidate), move, delta, forward, reverse};
+    return MoveApplication{
+        std::move(candidate), move, delta, forward, reverse, site_index};
   }
 
   [[nodiscard]] inline auto do_24_move(FoliatedTriangulation4 const& before)

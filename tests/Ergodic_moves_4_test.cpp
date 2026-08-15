@@ -7,23 +7,43 @@ namespace move_tracker = cdt::move_tracker;
 
 namespace
 {
-  void check_inverse(move_tracker::MoveType4D move)
+  void check_reverse_site_restores(FoliatedTriangulation4 const& before,
+                                   moves::MoveApplication const& moved)
   {
-    auto triangulation = FoliatedTriangulation4::periodic_seed(4);
-    auto const original_hash = triangulation.canonical_hash();
-    auto moved = moves::apply(triangulation, move);
-    REQUIRE(moved);
-    CHECK(moved->triangulation.is_valid());
-    CHECK_GT(moved->forward_candidates, 0);
-    CHECK_GT(moved->reverse_candidates, 0);
-
-    auto restored = moves::apply(moved->triangulation,
-                                 move_tracker::reverse_move(move));
-    REQUIRE(restored);
-    CHECK(restored->triangulation.is_valid());
-    CHECK_EQ(restored->triangulation.canonical_hash(), original_hash);
+    auto const reverse = move_tracker::reverse_move(moved.move);
+    auto const reverse_candidates =
+        moved.triangulation.candidate_multiplicity(reverse);
+    auto restored = false;
+    for (auto site = std::size_t{0};
+         site < static_cast<std::size_t>(reverse_candidates); ++site)
+    {
+      auto inverse = moves::apply(moved.triangulation, reverse, site);
+      if (inverse &&
+          inverse->triangulation.canonical_hash() == before.canonical_hash())
+      {
+        restored = inverse->triangulation.is_valid();
+        break;
+      }
+    }
+    CHECK(restored);
   }
-}
+
+  void check_delta_matches_counts(FoliatedTriangulation4 const& before,
+                                  moves::MoveApplication const& moved)
+  {
+    auto const before_counts = before.counts();
+    auto const after_counts  = moved.triangulation.counts();
+    CHECK_EQ(moved.delta.N0, after_counts.N0 - before_counts.N0);
+    CHECK_EQ(moved.delta.N1, after_counts.N1 - before_counts.N1);
+    CHECK_EQ(moved.delta.N2, after_counts.N2 - before_counts.N2);
+    CHECK_EQ(moved.delta.N3, after_counts.N3 - before_counts.N3);
+    CHECK_EQ(moved.delta.N4, after_counts.N4 - before_counts.N4);
+    CHECK_EQ(moved.delta.N41, after_counts.N41 - before_counts.N41);
+    CHECK_EQ(moved.delta.N32, after_counts.N32 - before_counts.N32);
+    CHECK_EQ(moved.delta.N23, after_counts.N23 - before_counts.N23);
+    CHECK_EQ(moved.delta.N14, after_counts.N14 - before_counts.N14);
+  }
+}  // namespace
 
 TEST_CASE("4D reverse_move covers every inverse pair")
 {
@@ -47,73 +67,104 @@ TEST_CASE("4D reverse_move covers every inverse pair")
 TEST_CASE("4D move plus inverse restores canonical hash")
 {
   using move_tracker::MoveType4D;
-  check_inverse(MoveType4D::TWO_FOUR);
-  check_inverse(MoveType4D::FOUR_TWO);
-  check_inverse(MoveType4D::THREE_THREE);
-  check_inverse(MoveType4D::FOUR_SIX);
-  check_inverse(MoveType4D::SIX_FOUR);
-  check_inverse(MoveType4D::TWO_EIGHT);
-  check_inverse(MoveType4D::EIGHT_TWO);
+  auto seed     = FoliatedTriangulation4::periodic_seed(4);
+  auto two_four = moves::apply(seed, MoveType4D::TWO_FOUR);
+  REQUIRE(two_four);
+  CHECK(two_four->triangulation.is_valid());
+  check_reverse_site_restores(seed, *two_four);
+
+  auto four_two = moves::apply(two_four->triangulation, MoveType4D::FOUR_TWO);
+  REQUIRE(four_two);
+  CHECK(four_two->triangulation.is_valid());
+  check_reverse_site_restores(two_four->triangulation, *four_two);
 }
 
-TEST_CASE("4D moves have documented exact combinatorial count changes")
+TEST_CASE("4D moves have exact incidence-derived combinatorial count changes")
 {
-  auto triangulation = FoliatedTriangulation4::periodic_seed(4);
-  for (auto const descriptor : all_move_descriptors_4d())
-  {
-    auto moved = moves::apply(triangulation, descriptor.move);
-    REQUIRE_MESSAGE(moved, descriptor.name);
-    CHECK_EQ(moved->delta.N0, descriptor.delta.N0);
-    CHECK_EQ(moved->delta.N1, descriptor.delta.N1);
-    CHECK_EQ(moved->delta.N2, descriptor.delta.N2);
-    CHECK_EQ(moved->delta.N3, descriptor.delta.N3);
-    CHECK_EQ(moved->delta.N4, descriptor.delta.N4);
-    CHECK_EQ(moved->delta.N41, descriptor.delta.N41);
-    CHECK_EQ(moved->delta.N32, descriptor.delta.N32);
-    CHECK_EQ(moved->delta.N23, descriptor.delta.N23);
-    CHECK_EQ(moved->delta.N14, descriptor.delta.N14);
-  }
+  auto seed     = FoliatedTriangulation4::periodic_seed(4);
+  auto two_four = moves::apply(seed, move_tracker::MoveType4D::TWO_FOUR);
+  REQUIRE(two_four);
+  check_delta_matches_counts(seed, *two_four);
+  CHECK_EQ(two_four->delta.N0, 0);
+  CHECK_EQ(two_four->delta.N1, 1);
+  CHECK_EQ(two_four->delta.N2, 4);
+  CHECK_EQ(two_four->delta.N3, 5);
+  CHECK_EQ(two_four->delta.N4, 2);
+  CHECK_EQ(two_four->delta.N41 + two_four->delta.N32 + two_four->delta.N23 +
+               two_four->delta.N14,
+           two_four->delta.N4);
+
+  auto four_two =
+      moves::apply(two_four->triangulation, move_tracker::MoveType4D::FOUR_TWO);
+  REQUIRE(four_two);
+  check_delta_matches_counts(two_four->triangulation, *four_two);
+  CHECK_EQ(four_two->delta.N0, 0);
+  CHECK_EQ(four_two->delta.N1, -1);
+  CHECK_EQ(four_two->delta.N2, -4);
+  CHECK_EQ(four_two->delta.N3, -5);
+  CHECK_EQ(four_two->delta.N4, -2);
+  CHECK_EQ(four_two->delta.N41 + four_two->delta.N32 + four_two->delta.N23 +
+               four_two->delta.N14,
+           four_two->delta.N4);
 }
 
 TEST_CASE("4D local and full action differences agree for every move")
 {
-  auto triangulation = FoliatedTriangulation4::periodic_seed(4);
+  auto        seed = FoliatedTriangulation4::periodic_seed(4);
   S4Couplings couplings{1.0L, 0.2L, 0.1L, 64, 0.001L};
-  for (auto const descriptor : all_move_descriptors_4d())
-  {
-    auto moved = moves::apply(triangulation, descriptor.move);
-    REQUIRE_MESSAGE(moved, descriptor.name);
-    auto const full_delta =
-        S4_action_difference(triangulation.counts(),
-                             moved->triangulation.counts(), couplings);
+  auto        check_action_delta = [&](FoliatedTriangulation4 const& before,
+                                moves::MoveApplication const& moved) {
+    auto const full_delta = S4_action_difference(
+        before.counts(), moved.triangulation.counts(), couplings);
     auto const local_delta =
-        local_action_difference(triangulation.counts(), descriptor, couplings);
+        local_action_difference(before.counts(), moved.delta, couplings);
     CHECK(full_delta == doctest::Approx(local_delta));
-  }
+  };
+
+  auto two_four = moves::apply(seed, move_tracker::MoveType4D::TWO_FOUR);
+  REQUIRE(two_four);
+  check_action_delta(seed, *two_four);
+
+  auto four_two =
+      moves::apply(two_four->triangulation, move_tracker::MoveType4D::FOUR_TWO);
+  REQUIRE(four_two);
+  check_action_delta(two_four->triangulation, *four_two);
 }
 
 TEST_CASE("4D forward and reverse proposal multiplicities are state-derived")
 {
+  auto       seed = FoliatedTriangulation4::periodic_seed(4);
+  auto const forward =
+      seed.candidate_multiplicity(move_tracker::MoveType4D::TWO_FOUR);
+  auto two_four = moves::apply(seed, move_tracker::MoveType4D::TWO_FOUR);
+  REQUIRE(two_four);
+  auto const reverse = two_four->triangulation.candidate_multiplicity(
+      move_tracker::MoveType4D::FOUR_TWO);
+  CHECK_EQ(two_four->forward_candidates, forward);
+  CHECK_EQ(two_four->reverse_candidates, reverse);
+  CHECK_GT(forward, 0);
+  CHECK_EQ(reverse, 1);
+}
+
+TEST_CASE("Unsupported 4D move descriptors have no production proposal sites")
+{
   auto triangulation = FoliatedTriangulation4::periodic_seed(4);
-  for (auto const descriptor : all_move_descriptors_4d())
+  using move_tracker::MoveType4D;
+  for (auto const move :
+       {MoveType4D::THREE_THREE, MoveType4D::FOUR_SIX, MoveType4D::SIX_FOUR,
+        MoveType4D::TWO_EIGHT, MoveType4D::EIGHT_TWO})
   {
-    auto const forward =
-        triangulation.candidate_multiplicity(descriptor.move);
-    auto moved = moves::apply(triangulation, descriptor.move);
-    REQUIRE_MESSAGE(moved, descriptor.name);
-    auto const reverse =
-        moved->triangulation.candidate_multiplicity(descriptor.inverse);
-    CHECK_EQ(moved->forward_candidates, forward);
-    CHECK_EQ(moved->reverse_candidates, reverse);
-    CHECK_GT(forward, 0);
-    CHECK_GT(reverse, 0);
+    CHECK_EQ(triangulation.candidate_multiplicity(move), 0);
+    CHECK_FALSE(moves::apply(triangulation, move));
   }
 }
 
 TEST_CASE("4D failed moves leave the original unchanged")
 {
-  auto counts = S4Counts{1, 0, 0, 0, 0, 0, 0, 0, 0};
-  FoliatedTriangulation4 triangulation{4, counts, {1, 1, 1, 1}};
+  auto                   counts = S4Counts{1, 0, 0, 0, 0, 0, 0, 0, 0};
+  FoliatedTriangulation4 triangulation{
+      4, counts, {1, 1, 1, 1}
+  };
   auto const hash = triangulation.canonical_hash();
   auto result = moves::apply(triangulation, move_tracker::MoveType4D::FOUR_TWO);
   CHECK_FALSE(result);

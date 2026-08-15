@@ -3,7 +3,7 @@
 *******************************************************************************/
 
 /// @file Foliated_triangulation_4.hpp
-/// @brief Abstract combinatorial 3+1D CDT triangulation state.
+/// @brief Persistent combinatorial 3+1D CDT triangulation state.
 
 #ifndef CDT_PLUSPLUS_FOLIATED_TRIANGULATION_4_HPP
 #define CDT_PLUSPLUS_FOLIATED_TRIANGULATION_4_HPP
@@ -21,6 +21,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -67,12 +68,11 @@ namespace cdt::four_d
     return static_cast<Int_precision>(type);
   }
 
-  /// @brief Abstract combinatorial 3+1D CDT triangulation state.
+  /// @brief Persistent combinatorial 3+1D CDT triangulation state.
   ///
-  /// Count-only states intentionally keep no local simplex complex. Topology
-  /// accessors therefore use the declared closed-S3 flag for those abstract
-  /// states, and derive Euler/connectivity data only when simplices are
-  /// present.
+  /// The production 4D runner evolves the explicit vertex/simplex incidence
+  /// complex. Aggregate counts and spatial profiles are derived caches only;
+  /// they are never used as a substitute for local proposal-site enumeration.
   class FoliatedTriangulation4
   {
    public:
@@ -81,6 +81,23 @@ namespace cdt::four_d
     using Profile          = std::vector<Int_precision>;
 
    private:
+    using Edge4D  = std::array<VertexId, 2>;
+    using Facet4D = std::array<VertexId, 4>;
+
+    struct TwoFourSite
+    {
+      Facet4D                  shared_facet{};
+      std::array<SimplexId, 2> simplex_ids{};
+      Edge4D                   new_edge{};
+    };
+
+    struct FourTwoSite
+    {
+      Edge4D                   edge{};
+      std::array<SimplexId, 4> simplex_ids{};
+      Facet4D                  replacement_facet{};
+    };
+
     Int_precision                               m_timeslices{2};
     bool                                        m_periodic{true};
     VertexContainer                             m_vertices;
@@ -168,10 +185,30 @@ namespace cdt::four_d
       return vertices;
     }
 
+    [[nodiscard]] static auto sorted_edge(Edge4D vertices)
+    {
+      std::ranges::sort(vertices);
+      return vertices;
+    }
+
     [[nodiscard]] static auto sorted_facet(std::array<VertexId, 4> vertices)
     {
       std::ranges::sort(vertices);
       return vertices;
+    }
+
+    [[nodiscard]] static auto contains_vertex(
+        std::array<VertexId, 5> const& vertices, VertexId const vertex) -> bool
+    {
+      return std::ranges::find(vertices, vertex) != vertices.end();
+    }
+
+    template <std::size_t size>
+    [[nodiscard]] static auto contains_vertex(
+        std::array<VertexId, size> const& vertices, VertexId const vertex)
+        -> bool
+    {
+      return std::ranges::find(vertices, vertex) != vertices.end();
     }
 
     [[nodiscard]] auto facet_vertices(Simplex4D const& simplex,
@@ -189,6 +226,49 @@ namespace cdt::four_d
         }
       }
       return sorted_facet(facet);
+    }
+
+    [[nodiscard]] auto simplex_by_id(SimplexId const id) const
+        -> Simplex4D const*
+    {
+      auto const it = std::ranges::find_if(
+          m_simplices, [id](auto const& simplex) { return simplex.id == id; });
+      return it == m_simplices.end() ? nullptr : &*it;
+    }
+
+    [[nodiscard]] auto next_simplex_id() const -> SimplexId
+    {
+      auto next = SimplexId{1};
+      for (auto const& simplex : m_simplices)
+      {
+        next = std::max(next, simplex.id + 1);
+      }
+      return next;
+    }
+
+    [[nodiscard]] auto simplex_contains_edge(Simplex4D const& simplex,
+                                             Edge4D const& edge) const -> bool
+    {
+      return contains_vertex(simplex.vertices, edge[0]) &&
+             contains_vertex(simplex.vertices, edge[1]);
+    }
+
+    [[nodiscard]] auto edge_exists(Edge4D const& edge) const -> bool
+    {
+      return std::ranges::any_of(m_simplices, [&](auto const& simplex) {
+        return simplex_contains_edge(simplex, edge);
+      });
+    }
+
+    [[nodiscard]] auto simplex_key_exists_outside(
+        std::array<VertexId, 5>    vertices,
+        std::set<SimplexId> const& removed_ids) const -> bool
+    {
+      auto const key = sorted_vertices(vertices);
+      return std::ranges::any_of(m_simplices, [&](auto const& simplex) {
+        return !removed_ids.contains(simplex.id) &&
+               sorted_vertices(simplex.vertices) == key;
+      });
     }
 
     [[nodiscard]] auto recompute_counts_from_complex() const -> S4Counts
@@ -298,6 +378,395 @@ namespace cdt::four_d
       return profile;
     }
 
+    void rebuild_neighbors()
+    {
+      for (auto& simplex : m_simplices)
+      {
+        simplex.neighbors.fill(std::nullopt);
+      }
+      std::map<Facet4D, std::vector<std::pair<std::size_t, int>>> incidence;
+      for (std::size_t simplex_index = 0; simplex_index < m_simplices.size();
+           ++simplex_index)
+      {
+        for (auto omitted = 0; omitted < 5; ++omitted)
+        {
+          incidence[facet_vertices(m_simplices[simplex_index], omitted)]
+              .push_back({simplex_index, omitted});
+        }
+      }
+      for (auto const& [_, incident] : incidence)
+      {
+        if (incident.size() != 2) { continue; }
+        auto const [first_index, first_local]   = incident[0];
+        auto const [second_index, second_local] = incident[1];
+        m_simplices[first_index]
+            .neighbors[static_cast<std::size_t>(first_local)] =
+            m_simplices[second_index].id;
+        m_simplices[second_index]
+            .neighbors[static_cast<std::size_t>(second_local)] =
+            m_simplices[first_index].id;
+      }
+    }
+
+    [[nodiscard]] auto make_site_inventory() const -> ProposalInventory4D
+    {
+      return ProposalInventory4D{
+          static_cast<Int_precision>(enumerate_two_four_sites().size()),
+          static_cast<Int_precision>(enumerate_four_two_sites().size()),
+          0,
+          0,
+          0,
+          0,
+          0};
+    }
+
+    void refresh_derived_state()
+    {
+      rebuild_vertex_time_cache();
+      rebuild_neighbors();
+      m_counts             = recompute_counts_from_complex();
+      m_spatial_profile    = recompute_spatial_profile();
+      m_proposal_inventory = make_site_inventory();
+    }
+
+    [[nodiscard]] auto replacement_is_legal(
+        std::vector<std::array<VertexId, 5>> const& replacement,
+        std::set<SimplexId> const&                  removed_ids) const -> bool
+    {
+      std::set<std::array<VertexId, 5>> replacement_keys;
+      for (auto const& vertices : replacement)
+      {
+        if (std::set<VertexId>(vertices.begin(), vertices.end()).size() != 5)
+        {
+          return false;
+        }
+        if (!classify_simplex(vertices)) { return false; }
+        auto const key = sorted_vertices(vertices);
+        if (!replacement_keys.insert(key).second) { return false; }
+        if (simplex_key_exists_outside(vertices, removed_ids)) { return false; }
+      }
+      return true;
+    }
+
+    [[nodiscard]] static auto cluster_boundary_facets(
+        std::vector<std::array<VertexId, 5>> const& cluster)
+        -> std::optional<std::set<Facet4D>>
+    {
+      std::map<Facet4D, int> facet_incidence;
+      for (auto const& simplex : cluster)
+      {
+        for (auto omitted = 0; omitted < 5; ++omitted)
+        {
+          Facet4D facet{};
+          auto    out = 0;
+          for (auto index = 0; index < 5; ++index)
+          {
+            if (index == omitted) { continue; }
+            facet[static_cast<std::size_t>(out++)] =
+                simplex[static_cast<std::size_t>(index)];
+          }
+          ++facet_incidence[sorted_facet(facet)];
+        }
+      }
+
+      std::set<Facet4D> boundary;
+      for (auto const& [facet, incidence] : facet_incidence)
+      {
+        if (incidence == 1) { boundary.insert(facet); }
+        else if (incidence != 2) { return std::nullopt; }
+      }
+      return boundary;
+    }
+
+    [[nodiscard]] auto replacement_preserves_valid_complex(
+        std::set<SimplexId> const&                  removed_ids,
+        std::vector<std::array<VertexId, 5>> const& replacement) const -> bool
+    {
+      if (!replacement_is_legal(replacement, removed_ids)) { return false; }
+
+      std::vector<std::array<VertexId, 5>> removed_cluster;
+      removed_cluster.reserve(removed_ids.size());
+      for (auto const& simplex : m_simplices)
+      {
+        if (removed_ids.contains(simplex.id))
+        {
+          removed_cluster.push_back(simplex.vertices);
+        }
+      }
+      if (removed_cluster.size() != removed_ids.size()) { return false; }
+
+      auto const removed_boundary = cluster_boundary_facets(removed_cluster);
+      auto const replacement_boundary = cluster_boundary_facets(replacement);
+      if (!removed_boundary || !replacement_boundary ||
+          *removed_boundary != *replacement_boundary)
+      {
+        return false;
+      }
+
+      std::map<Facet4D, int> outside_incidence;
+      for (auto const& simplex : m_simplices)
+      {
+        if (removed_ids.contains(simplex.id)) { continue; }
+        for (auto omitted = 0; omitted < 5; ++omitted)
+        {
+          ++outside_incidence[facet_vertices(simplex, omitted)];
+        }
+      }
+
+      std::map<Facet4D, int> replacement_incidence;
+      for (auto const& simplex : replacement)
+      {
+        for (auto omitted = 0; omitted < 5; ++omitted)
+        {
+          Facet4D facet{};
+          auto    out = 0;
+          for (auto index = 0; index < 5; ++index)
+          {
+            if (index == omitted) { continue; }
+            facet[static_cast<std::size_t>(out++)] =
+                simplex[static_cast<std::size_t>(index)];
+          }
+          ++replacement_incidence[sorted_facet(facet)];
+        }
+      }
+
+      for (auto const& [facet, incidence] : replacement_incidence)
+      {
+        auto const outside_count =
+            outside_incidence.contains(facet) ? outside_incidence[facet] : 0;
+        if (incidence == 2 && outside_count != 0) { return false; }
+        if (incidence == 1 && outside_count != 1) { return false; }
+      }
+      return true;
+    }
+
+    [[nodiscard]] auto enumerate_two_four_sites() const
+        -> std::vector<TwoFourSite>
+    {
+      std::map<Facet4D, std::vector<SimplexId>> incidence;
+      for (auto const& simplex : m_simplices)
+      {
+        for (auto omitted = 0; omitted < 5; ++omitted)
+        {
+          incidence[facet_vertices(simplex, omitted)].push_back(simplex.id);
+        }
+      }
+
+      std::vector<TwoFourSite> sites;
+      for (auto const& [facet, simplex_ids] : incidence)
+      {
+        if (simplex_ids.size() != 2) { continue; }
+        auto const* first  = simplex_by_id(simplex_ids[0]);
+        auto const* second = simplex_by_id(simplex_ids[1]);
+        if (first == nullptr || second == nullptr) { continue; }
+
+        std::optional<VertexId> first_apex;
+        std::optional<VertexId> second_apex;
+        for (auto const vertex : first->vertices)
+        {
+          if (!contains_vertex(facet, vertex)) { first_apex = vertex; }
+        }
+        for (auto const vertex : second->vertices)
+        {
+          if (!contains_vertex(facet, vertex)) { second_apex = vertex; }
+        }
+        if (!first_apex || !second_apex || *first_apex == *second_apex)
+        {
+          continue;
+        }
+
+        auto const new_edge = sorted_edge(Edge4D{*first_apex, *second_apex});
+        if (edge_exists(new_edge)) { continue; }
+
+        std::vector<std::array<VertexId, 5>> replacement;
+        replacement.reserve(4);
+        for (auto omitted_vertex : facet)
+        {
+          std::array<VertexId, 5> vertices{};
+          auto                    out = 0;
+          for (auto const vertex : facet)
+          {
+            if (vertex != omitted_vertex)
+            {
+              vertices[static_cast<std::size_t>(out++)] = vertex;
+            }
+          }
+          vertices[static_cast<std::size_t>(out++)] = *first_apex;
+          vertices[static_cast<std::size_t>(out++)] = *second_apex;
+          replacement.push_back(vertices);
+        }
+        auto const removed_ids =
+            std::set<SimplexId>{simplex_ids[0], simplex_ids[1]};
+        if (!replacement_preserves_valid_complex(removed_ids, replacement))
+        {
+          continue;
+        }
+
+        auto site         = TwoFourSite{};
+        site.shared_facet = facet;
+        site.simplex_ids  = std::array{simplex_ids[0], simplex_ids[1]};
+        site.new_edge     = new_edge;
+        sites.push_back(site);
+      }
+      std::ranges::sort(sites, {}, [](auto const& site) {
+        return std::tuple{site.shared_facet, site.new_edge, site.simplex_ids};
+      });
+      return sites;
+    }
+
+    [[nodiscard]] auto enumerate_four_two_sites() const
+        -> std::vector<FourTwoSite>
+    {
+      std::map<Edge4D, std::vector<SimplexId>> incidence;
+      for (auto const& simplex : m_simplices)
+      {
+        for (auto i = 0; i < 5; ++i)
+        {
+          for (auto j = i + 1; j < 5; ++j)
+          {
+            incidence[sorted_edge(Edge4D{
+                          simplex.vertices[static_cast<std::size_t>(i)],
+                          simplex.vertices[static_cast<std::size_t>(j)]})]
+                .push_back(simplex.id);
+          }
+        }
+      }
+
+      std::vector<FourTwoSite> sites;
+      for (auto const& [edge, simplex_ids] : incidence)
+      {
+        if (simplex_ids.size() != 4) { continue; }
+        if (vertex_time(edge[0]) == vertex_time(edge[1]) ||
+            !are_adjacent_times(vertex_time(edge[0]), vertex_time(edge[1])))
+        {
+          continue;
+        }
+        std::set<VertexId> union_vertices;
+        auto               all_simplices_found = true;
+        for (auto const id : simplex_ids)
+        {
+          auto const* simplex = simplex_by_id(id);
+          if (simplex == nullptr || !simplex_contains_edge(*simplex, edge))
+          {
+            all_simplices_found = false;
+            break;
+          }
+          union_vertices.insert(simplex->vertices.begin(),
+                                simplex->vertices.end());
+        }
+        if (!all_simplices_found || union_vertices.size() != 6) { continue; }
+
+        Facet4D replacement_facet{};
+        auto    out = 0;
+        for (auto const vertex : union_vertices)
+        {
+          if (vertex != edge[0] && vertex != edge[1])
+          {
+            replacement_facet[static_cast<std::size_t>(out++)] = vertex;
+          }
+        }
+        if (out != 4) { continue; }
+        replacement_facet = sorted_facet(replacement_facet);
+
+        std::set<VertexId> omitted_vertices;
+        auto               star_has_expected_form = true;
+        for (auto const id : simplex_ids)
+        {
+          auto const*             simplex                  = simplex_by_id(id);
+          auto                    link_vertices_in_simplex = 0;
+          std::optional<VertexId> omitted;
+          for (auto const vertex : replacement_facet)
+          {
+            if (contains_vertex(simplex->vertices, vertex))
+            {
+              ++link_vertices_in_simplex;
+            }
+            else { omitted = vertex; }
+          }
+          if (link_vertices_in_simplex != 3 || !omitted)
+          {
+            star_has_expected_form = false;
+            break;
+          }
+          omitted_vertices.insert(*omitted);
+        }
+        if (!star_has_expected_form || omitted_vertices.size() != 4)
+        {
+          continue;
+        }
+
+        auto first_replacement = std::array<VertexId, 5>{
+            replacement_facet[0], replacement_facet[1], replacement_facet[2],
+            replacement_facet[3], edge[0]};
+        auto second_replacement = std::array<VertexId, 5>{
+            replacement_facet[0], replacement_facet[1], replacement_facet[2],
+            replacement_facet[3], edge[1]};
+        auto const removed_ids =
+            std::set<SimplexId>(simplex_ids.begin(), simplex_ids.end());
+        auto const replacements =
+            std::vector{first_replacement, second_replacement};
+        if (!replacement_preserves_valid_complex(removed_ids, replacements))
+        {
+          continue;
+        }
+
+        auto site              = FourTwoSite{};
+        site.edge              = edge;
+        site.simplex_ids       = std::array{simplex_ids[0], simplex_ids[1],
+                                      simplex_ids[2], simplex_ids[3]};
+        site.replacement_facet = replacement_facet;
+        sites.push_back(site);
+      }
+      std::ranges::sort(sites, {}, [](auto const& site) {
+        return std::tuple{site.edge, site.replacement_facet, site.simplex_ids};
+      });
+      return sites;
+    }
+
+    [[nodiscard]] auto replace_simplices(
+        std::set<SimplexId> const&                  removed_ids,
+        std::vector<std::array<VertexId, 5>> const& replacement) -> bool
+    {
+      if (!replacement_preserves_valid_complex(removed_ids, replacement))
+      {
+        return false;
+      }
+
+      auto             before = *this;
+      SimplexContainer updated;
+      updated.reserve(m_simplices.size() - removed_ids.size() +
+                      replacement.size());
+      for (auto const& simplex : m_simplices)
+      {
+        if (!removed_ids.contains(simplex.id)) { updated.push_back(simplex); }
+      }
+
+      auto next_id = next_simplex_id();
+      for (auto const& vertices : replacement)
+      {
+        auto type = classify_simplex(vertices);
+        if (!type)
+        {
+          *this = before;
+          return false;
+        }
+        Simplex4D simplex;
+        simplex.id       = next_id++;
+        simplex.vertices = vertices;
+        simplex.type     = *type;
+        updated.push_back(simplex);
+      }
+
+      m_simplices = std::move(updated);
+      refresh_derived_state();
+      if (!validate().valid())
+      {
+        *this = before;
+        return false;
+      }
+      return true;
+    }
+
     [[nodiscard]] auto spacelike_facets_by_slice() const
         -> std::vector<std::set<std::array<VertexId, 4>>>
     {
@@ -328,8 +797,7 @@ namespace cdt::four_d
       if (m_simplices.empty())
       {
         return Profile(static_cast<std::size_t>(m_timeslices),
-                       m_closed_s3_slices ? static_cast<Int_precision>(0)
-                                          : static_cast<Int_precision>(1));
+                       static_cast<Int_precision>(1));
       }
 
       Profile    result(static_cast<std::size_t>(m_timeslices), 0);
@@ -378,7 +846,7 @@ namespace cdt::four_d
 
     [[nodiscard]] auto spatial_slices_are_connected() const -> bool
     {
-      if (m_simplices.empty()) { return m_closed_s3_slices; }
+      if (m_simplices.empty()) { return false; }
       auto const facets_by_slice = spacelike_facets_by_slice();
       for (auto const& facets : facets_by_slice)
       {
@@ -467,119 +935,11 @@ namespace cdt::four_d
              (!m_closed_s3_slices || spatial_slices_are_connected());
     }
 
-    void add_count_delta(S4Counts const& delta)
-    {
-      m_counts.N0 += delta.N0;
-      m_counts.N1 += delta.N1;
-      m_counts.N2 += delta.N2;
-      m_counts.N3 += delta.N3;
-      m_counts.N4 += delta.N4;
-      m_counts.N41 += delta.N41;
-      m_counts.N32 += delta.N32;
-      m_counts.N23 += delta.N23;
-      m_counts.N14 += delta.N14;
-      m_counts.class_resolved.reset();
-      m_proposal_inventory = proposal_inventory_from_counts(m_counts);
-    }
-
-    [[nodiscard]] static auto spatial_profile_delta(
-        move_tracker::MoveType4D const move) -> Int_precision
-    {
-      using move_tracker::MoveType4D;
-      switch (move)
-      {
-        case MoveType4D::TWO_EIGHT: return 1;
-        case MoveType4D::EIGHT_TWO: return -1;
-        default: return 0;
-      }
-    }
-
-    [[nodiscard]] auto apply_spatial_profile_delta(Int_precision const delta)
-        -> bool
-    {
-      if (delta == 0) { return true; }
-      if (m_spatial_profile.size() != static_cast<std::size_t>(m_timeslices))
-      {
-        return false;
-      }
-      if (delta > 0)
-      {
-        // Abstract proposals currently carry no local slice label. Slice zero
-        // is the deterministic reservoir until moves become slice-resolved.
-        m_spatial_profile.front() += delta;
-        return true;
-      }
-      auto remaining = -delta;
-      if (m_spatial_profile.front() < remaining) { return false; }
-      m_spatial_profile.front() -= remaining;
-      return true;
-    }
-
-    [[nodiscard]] auto can_apply(S4Counts const& delta) const -> bool
-    {
-      auto const after =
-          S4Counts{m_counts.N0 + delta.N0,   m_counts.N1 + delta.N1,
-                   m_counts.N2 + delta.N2,   m_counts.N3 + delta.N3,
-                   m_counts.N4 + delta.N4,   m_counts.N41 + delta.N41,
-                   m_counts.N32 + delta.N32, m_counts.N23 + delta.N23,
-                   m_counts.N14 + delta.N14};
-      return after.N0 >= 0 && after.N1 >= 0 && after.N2 >= 0 && after.N3 >= 0 &&
-             after.N4 >= 0 && after.N41 >= 0 && after.N32 >= 0 &&
-             after.N23 >= 0 && after.N14 >= 0 &&
-             after.N4 == after.N41 + after.N32 + after.N23 + after.N14;
-    }
-
     void add_vertex(VertexId& next_vertex, Int_precision const time)
     {
       m_vertices.push_back(Vertex4D{next_vertex, time});
       m_vertex_times[next_vertex] = time;
       ++next_vertex;
-    }
-
-    void add_boundary_component(VertexId& next_vertex, SimplexId& next_simplex,
-                                Int_precision const lower_time,
-                                Int_precision const upper_time,
-                                int const           lower_vertices)
-    {
-      std::array<VertexId, 6> vertices{};
-      for (auto index = 0; index < 6; ++index)
-      {
-        auto const time = index < lower_vertices ? lower_time : upper_time;
-        vertices[static_cast<std::size_t>(index)] = next_vertex;
-        add_vertex(next_vertex, time);
-      }
-
-      std::array<SimplexId, 6> ids{};
-      for (auto omitted = 0; omitted < 6; ++omitted)
-      {
-        ids[static_cast<std::size_t>(omitted)] = next_simplex++;
-      }
-
-      for (auto omitted = 0; omitted < 6; ++omitted)
-      {
-        Simplex4D simplex;
-        simplex.id = ids[static_cast<std::size_t>(omitted)];
-        auto out   = 0;
-        for (auto index = 0; index < 6; ++index)
-        {
-          if (index != omitted)
-          {
-            simplex.vertices[static_cast<std::size_t>(out++)] =
-                vertices[static_cast<std::size_t>(index)];
-          }
-        }
-        simplex.type = classify_simplex(simplex.vertices).value();
-
-        for (auto local = 0; local < 5; ++local)
-        {
-          auto const omitted_neighbor = static_cast<int>(
-              std::ranges::find(vertices, simplex.vertices[local]) -
-              vertices.begin());
-          simplex.neighbors[static_cast<std::size_t>(local)] =
-              ids[static_cast<std::size_t>(omitted_neighbor)];
-        }
-        m_simplices.push_back(simplex);
-      }
     }
 
    public:
@@ -624,10 +984,13 @@ namespace cdt::four_d
       result.rebuild_vertex_time_cache();
       if (!result.m_vertices.empty() || !result.m_simplices.empty())
       {
-        result.m_counts = result.recompute_counts_from_complex();
+        result.refresh_derived_state();
       }
-      result.m_proposal_inventory =
-          proposal_inventory_from_counts(result.m_counts);
+      else
+      {
+        result.m_proposal_inventory =
+            proposal_inventory_from_counts(result.m_counts);
+      }
       return result;
     }
 
@@ -641,31 +1004,75 @@ namespace cdt::four_d
       result.m_simplices.clear();
       result.m_vertex_times.clear();
 
-      VertexId  next_vertex  = 1;
-      SimplexId next_simplex = 1;
+      VertexId                             next_vertex  = 1;
+      SimplexId                            next_simplex = 1;
+      std::vector<std::array<VertexId, 5>> slice_vertices(
+          static_cast<std::size_t>(result.m_timeslices));
       for (auto time = 0; time < result.m_timeslices; ++time)
       {
-        auto const next_time = (time + 1) % result.m_timeslices;
-        result.add_boundary_component(next_vertex, next_simplex, time,
-                                      next_time, 4);
-        result.add_boundary_component(next_vertex, next_simplex, time,
-                                      next_time, 2);
+        for (auto vertex = 0; vertex < 5; ++vertex)
+        {
+          slice_vertices[static_cast<std::size_t>(time)]
+                        [static_cast<std::size_t>(vertex)] = next_vertex;
+          result.add_vertex(next_vertex, time);
+        }
       }
 
-      result.m_counts = result.recompute_counts_from_complex();
-      result.m_proposal_inventory =
-          proposal_inventory_from_counts(result.m_counts);
-      result.m_spatial_profile  = result.recompute_spatial_profile();
+      for (auto time = 0; time < result.m_timeslices; ++time)
+      {
+        auto const  next_time = (time + 1) % result.m_timeslices;
+        auto const& lower     = slice_vertices[static_cast<std::size_t>(time)];
+        auto const& upper = slice_vertices[static_cast<std::size_t>(next_time)];
+        for (auto omitted_base_vertex = 0; omitted_base_vertex < 5;
+             ++omitted_base_vertex)
+        {
+          std::array<int, 4> base{};
+          auto               out = 0;
+          for (auto vertex = 0; vertex < 5; ++vertex)
+          {
+            if (vertex != omitted_base_vertex)
+            {
+              base[static_cast<std::size_t>(out++)] = vertex;
+            }
+          }
+
+          auto add_simplex = [&](std::array<VertexId, 5> vertices) {
+            Simplex4D simplex;
+            simplex.id       = next_simplex++;
+            simplex.vertices = vertices;
+            simplex.type     = result.classify_simplex(vertices).value();
+            result.m_simplices.push_back(simplex);
+          };
+
+          add_simplex(std::array<VertexId, 5>{
+              lower[static_cast<std::size_t>(base[0])],
+              lower[static_cast<std::size_t>(base[1])],
+              lower[static_cast<std::size_t>(base[2])],
+              lower[static_cast<std::size_t>(base[3])],
+              upper[static_cast<std::size_t>(base[3])]});
+          add_simplex(std::array<VertexId, 5>{
+              lower[static_cast<std::size_t>(base[0])],
+              lower[static_cast<std::size_t>(base[1])],
+              lower[static_cast<std::size_t>(base[2])],
+              upper[static_cast<std::size_t>(base[2])],
+              upper[static_cast<std::size_t>(base[3])]});
+          add_simplex(std::array<VertexId, 5>{
+              lower[static_cast<std::size_t>(base[0])],
+              lower[static_cast<std::size_t>(base[1])],
+              upper[static_cast<std::size_t>(base[1])],
+              upper[static_cast<std::size_t>(base[2])],
+              upper[static_cast<std::size_t>(base[3])]});
+          add_simplex(std::array<VertexId, 5>{
+              lower[static_cast<std::size_t>(base[0])],
+              upper[static_cast<std::size_t>(base[0])],
+              upper[static_cast<std::size_t>(base[1])],
+              upper[static_cast<std::size_t>(base[2])],
+              upper[static_cast<std::size_t>(base[3])]});
+        }
+      }
+
       result.m_closed_s3_slices = true;
-      // The production 4D runner evolves abstract count/profile states. Keep
-      // the generated complex as an initializer only, so later moves cannot
-      // expose stale vertex or simplex topology.
-      result.m_vertices.clear();
-      result.m_simplices.clear();
-      result.m_vertex_times.clear();
-      result.m_counts.class_resolved.reset();
-      result.m_proposal_inventory =
-          proposal_inventory_from_counts(result.m_counts);
+      result.refresh_derived_state();
       return result;
     }
 
@@ -700,7 +1107,8 @@ namespace cdt::four_d
 
     [[nodiscard]] auto has_closed_s3_slices() const -> bool
     {
-      return m_closed_s3_slices && topology_matches_closed_s3_slices();
+      return !m_simplices.empty() && m_closed_s3_slices &&
+             topology_matches_closed_s3_slices();
     }
 
     [[nodiscard]] auto spatial_topology() const -> std::string_view
@@ -710,6 +1118,7 @@ namespace cdt::four_d
 
     [[nodiscard]] auto spacetime_topology() const -> std::string_view
     {
+      if (!has_closed_s3_slices()) { return "unvalidated"; }
       return m_periodic ? "S3xS1" : "S3xI";
     }
 
@@ -824,63 +1233,69 @@ namespace cdt::four_d
         move_tracker::MoveType4D const move) const -> Int_precision
     {
       using move_tracker::MoveType4D;
-      if (move == MoveType4D::NO_MOVE) { return 0; }
-      auto descriptor = move_descriptor_4d(move);
-      if (move == MoveType4D::THREE_THREE && !m_three_three_forward)
+      switch (move)
       {
-        return std::max<Int_precision>(
-            0, m_proposal_inventory.count(
-                   ProposalObservable4D::two_three_simplices));
+        case MoveType4D::TWO_FOUR:
+          return static_cast<Int_precision>(enumerate_two_four_sites().size());
+        case MoveType4D::FOUR_TWO:
+          return static_cast<Int_precision>(enumerate_four_two_sites().size());
+        default: return 0;
       }
-      return std::max<Int_precision>(
-          0, m_proposal_inventory.count(descriptor.proposal_observable));
     }
 
     [[nodiscard]] auto is_applicable(move_tracker::MoveType4D const move) const
         -> bool
     {
-      auto delta = move_count_delta(move);
-      if (move == move_tracker::MoveType4D::THREE_THREE &&
-          !m_three_three_forward)
-      {
-        delta.N32 = 1;
-        delta.N23 = -1;
-      }
-      return candidate_multiplicity(move) > 0 && can_apply(delta);
+      return candidate_multiplicity(move) > 0;
     }
 
-    [[nodiscard]] auto apply_move(move_tracker::MoveType4D const move) -> bool
+    [[nodiscard]] auto apply_move(move_tracker::MoveType4D const move,
+                                  std::size_t const site_index = 0) -> bool
     {
-      auto const before = *this;
-      auto       delta  = move_count_delta(move);
-      if (move == move_tracker::MoveType4D::THREE_THREE)
+      using move_tracker::MoveType4D;
+      if (move == MoveType4D::TWO_FOUR)
       {
-        if (!m_three_three_forward)
+        auto const sites = enumerate_two_four_sites();
+        if (site_index >= sites.size()) { return false; }
+        auto const&                          site = sites[site_index];
+        std::vector<std::array<VertexId, 5>> replacement;
+        replacement.reserve(4);
+        for (auto omitted_vertex : site.shared_facet)
         {
-          delta.N32 = 1;
-          delta.N23 = -1;
+          std::array<VertexId, 5> vertices{};
+          auto                    out = 0;
+          for (auto const vertex : site.shared_facet)
+          {
+            if (vertex != omitted_vertex)
+            {
+              vertices[static_cast<std::size_t>(out++)] = vertex;
+            }
+          }
+          vertices[static_cast<std::size_t>(out++)] = site.new_edge[0];
+          vertices[static_cast<std::size_t>(out++)] = site.new_edge[1];
+          replacement.push_back(vertices);
         }
+        return replace_simplices(
+            std::set<SimplexId>{site.simplex_ids[0], site.simplex_ids[1]},
+            replacement);
       }
-      if (!is_applicable(move) || !can_apply(delta)) { return false; }
-      add_count_delta(delta);
-      m_vertices.clear();
-      m_simplices.clear();
-      m_vertex_times.clear();
-      if (!apply_spatial_profile_delta(spatial_profile_delta(move)))
+      if (move == MoveType4D::FOUR_TWO)
       {
-        *this = before;
-        return false;
+        auto const sites = enumerate_four_two_sites();
+        if (site_index >= sites.size()) { return false; }
+        auto const& site              = sites[site_index];
+        auto        first_replacement = std::array<VertexId, 5>{
+            site.replacement_facet[0], site.replacement_facet[1],
+            site.replacement_facet[2], site.replacement_facet[3], site.edge[0]};
+        auto second_replacement = std::array<VertexId, 5>{
+            site.replacement_facet[0], site.replacement_facet[1],
+            site.replacement_facet[2], site.replacement_facet[3], site.edge[1]};
+        auto const removed_ids = std::set<SimplexId>(site.simplex_ids.begin(),
+                                                     site.simplex_ids.end());
+        return replace_simplices(
+            removed_ids, std::vector{first_replacement, second_replacement});
       }
-      if (move == move_tracker::MoveType4D::THREE_THREE)
-      {
-        m_three_three_forward = !m_three_three_forward;
-      }
-      if (!validate().valid())
-      {
-        *this = before;
-        return false;
-      }
-      return true;
+      return false;
     }
 
     [[nodiscard]] auto validate() const -> ValidationReport
@@ -901,6 +1316,12 @@ namespace cdt::four_d
           m_counts.N32 < 0 || m_counts.N23 < 0 || m_counts.N14 < 0)
       {
         report.errors.emplace_back("Negative simplex count found.");
+      }
+      if (m_vertices.empty() || m_simplices.empty())
+      {
+        report.standard_cdt_candidate = false;
+        report.errors.emplace_back(
+            "A standard 4D CDT candidate requires an explicit simplex complex.");
       }
       if (!m_periodic)
       {
@@ -1072,10 +1493,15 @@ namespace cdt::four_d
             break;
         }
       }
+      reversed.m_three_three_forward = !m_three_three_forward;
+      if (!reversed.m_simplices.empty())
+      {
+        reversed.refresh_derived_state();
+        return reversed;
+      }
       std::swap(reversed.m_counts.N41, reversed.m_counts.N14);
       std::swap(reversed.m_counts.N32, reversed.m_counts.N23);
-      reversed.m_proposal_inventory =
-          proposal_inventory_from_counts(reversed.m_counts);
+      reversed.m_proposal_inventory = ProposalInventory4D{};
       if (m_spatial_profile.size() == static_cast<std::size_t>(m_timeslices))
       {
         Profile    mapped(m_spatial_profile.size(), 0);
@@ -1086,7 +1512,6 @@ namespace cdt::four_d
         }
         reversed.m_spatial_profile = std::move(mapped);
       }
-      reversed.m_three_three_forward = !m_three_three_forward;
       return reversed;
     }
 
@@ -1110,6 +1535,33 @@ namespace cdt::four_d
       else { stream << ",0,0,0,0"; }
       stream << ";V=";
       for (auto const volume : m_spatial_profile) { stream << volume << ','; }
+      stream << ";VT=";
+      std::vector<std::pair<VertexId, Int_precision>> vertices;
+      vertices.reserve(m_vertices.size());
+      for (auto const& vertex : m_vertices)
+      {
+        vertices.push_back({vertex.id, vertex.time});
+      }
+      std::ranges::sort(vertices);
+      for (auto const& [id, time] : vertices)
+      {
+        stream << id << '@' << time << ',';
+      }
+      stream << ";S=";
+      std::vector<std::array<VertexId, 5>> simplices;
+      simplices.reserve(m_simplices.size());
+      for (auto const& simplex : m_simplices)
+      {
+        simplices.push_back(sorted_vertices(simplex.vertices));
+      }
+      std::ranges::sort(simplices);
+      for (auto const& simplex : simplices)
+      {
+        for (auto const vertex : simplex) { stream << vertex << '.'; }
+        stream << static_cast<int>(classify_simplex(simplex).value_or(
+                      SimplexType4D::FOUR_ONE))
+               << ',';
+      }
       return stream.str();
     }
   };

@@ -131,8 +131,9 @@ TEST_CASE("Covariance produces a regularized effective-action kernel")
   };
   auto kernel = effective_action_kernel(profiles);
   REQUIRE_EQ(kernel.covariance.size(), 3);
-  REQUIRE_EQ(kernel.inverse_covariance_diagonal_regularized.size(), 3);
-  CHECK_GT(kernel.inverse_covariance_diagonal_regularized[1][1], 0.0L);
+  REQUIRE_EQ(kernel.inverse_covariance_regularized.size(), 3);
+  REQUIRE_EQ(kernel.inverse_covariance_regularized[0].size(), 3);
+  CHECK_GT(kernel.inverse_covariance_regularized[1][1], 0.0L);
 }
 
 TEST_CASE("Profile statistics reject mismatched dimensions")

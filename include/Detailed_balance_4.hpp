@@ -79,7 +79,15 @@ namespace cdt::four_d
       FoliatedTriangulation4 const& triangulation, S4Couplings const& couplings)
       -> long double
   {
-    return std::exp(-S4_bulk_action(triangulation.counts(), couplings));
+    auto const log_weight = -S4_bulk_action(triangulation.counts(), couplings);
+    auto const min_log    = std::log(std::numeric_limits<long double>::min());
+    auto const max_log    = std::log(std::numeric_limits<long double>::max());
+    if (!std::isfinite(log_weight) || log_weight <= min_log ||
+        log_weight >= max_log)
+    {
+      return std::numeric_limits<long double>::quiet_NaN();
+    }
+    return std::exp(log_weight);
   }
 
   [[nodiscard]] inline auto log_boltzmann_weight(
@@ -124,25 +132,31 @@ namespace cdt::four_d
       auto [state, depth] = frontier.front();
       frontier.pop();
       if (depth >= max_depth) { continue; }
-      for (auto const descriptor : all_move_descriptors_4d())
+      for (auto const& descriptor : all_move_descriptors_4d())
       {
-        auto moved = moves::apply(state, descriptor.move);
-        if (!moved) { continue; }
-        auto const hash = moved->triangulation.canonical_hash();
-        if (!states.contains(hash))
+        auto const multiplicity = state.candidate_multiplicity(descriptor.move);
+        for (auto site = std::size_t{0};
+             site < static_cast<std::size_t>(multiplicity); ++site)
         {
-          if (states.size() >= max_states)
+          auto moved = moves::apply(state, descriptor.move, site);
+          if (!moved) { continue; }
+          auto const hash = moved->triangulation.canonical_hash();
+          if (!states.contains(hash))
           {
-            report.passed = false;
-            report.errors.emplace_back(
-                "Detailed-balance enumeration reached max_states.");
-            cap_reached = true;
-            break;
+            if (states.size() >= max_states)
+            {
+              report.passed = false;
+              report.errors.emplace_back(
+                  "Detailed-balance enumeration reached max_states.");
+              cap_reached = true;
+              break;
+            }
+            states.emplace(hash, moved->triangulation);
+            depths.emplace(hash, depth + 1);
+            frontier.emplace(moved->triangulation, depth + 1);
           }
-          states.emplace(hash, moved->triangulation);
-          depths.emplace(hash, depth + 1);
-          frontier.emplace(moved->triangulation, depth + 1);
         }
+        if (cap_reached) { break; }
       }
     }
     if (cap_reached) { return report; }
@@ -151,88 +165,111 @@ namespace cdt::four_d
     {
       auto const from_depth = depths.at(from_hash);
       if (from_depth >= max_depth) { continue; }
-      for (auto const descriptor : all_move_descriptors_4d())
+      for (auto const& descriptor : all_move_descriptors_4d())
       {
-        auto moved = moves::apply(from_state, descriptor.move);
-        if (!moved) { continue; }
-        auto const to_hash = moved->triangulation.canonical_hash();
-        auto const to_it   = states.find(to_hash);
-        if (to_it == states.end())
+        auto const multiplicity =
+            from_state.candidate_multiplicity(descriptor.move);
+        for (auto site = std::size_t{0};
+             site < static_cast<std::size_t>(multiplicity); ++site)
         {
-          report.passed = false;
-          report.errors.emplace_back(
-              "Reachable transition escaped enumeration depth.");
-          continue;
-        }
-        auto const& to_state = to_it->second;
-        auto        reverse  = moves::apply(to_state, descriptor.inverse);
-        if (!reverse || reverse->triangulation.canonical_hash() != from_hash)
-        {
-          report.passed = false;
-          report.errors.emplace_back("Missing reverse transition.");
-          continue;
-        }
+          auto moved = moves::apply(from_state, descriptor.move, site);
+          if (!moved) { continue; }
+          auto const to_hash = moved->triangulation.canonical_hash();
+          auto const to_it   = states.find(to_hash);
+          if (to_it == states.end())
+          {
+            report.passed = false;
+            report.errors.emplace_back(
+                "Reachable transition escaped enumeration depth.");
+            continue;
+          }
+          auto const& to_state      = to_it->second;
+          auto        reverse_found = false;
+          auto const  reverse_multiplicity =
+              to_state.candidate_multiplicity(descriptor.inverse);
+          for (auto reverse_site = std::size_t{0};
+               reverse_site < static_cast<std::size_t>(reverse_multiplicity);
+               ++reverse_site)
+          {
+            auto reverse =
+                moves::apply(to_state, descriptor.inverse, reverse_site);
+            if (reverse && reverse->triangulation.canonical_hash() == from_hash)
+            {
+              reverse_found = true;
+              break;
+            }
+          }
+          if (!reverse_found)
+          {
+            report.passed = false;
+            report.errors.emplace_back("Missing reverse transition.");
+            continue;
+          }
 
-        auto const forward_q =
-            proposal_probability(from_state, descriptor.move);
-        auto const reverse_q =
-            proposal_probability(to_state, descriptor.inverse);
-        auto const forward_acceptance = acceptance_probability(
-            from_state, to_state, descriptor.move, couplings);
-        auto const reverse_acceptance = acceptance_probability(
-            to_state, from_state, descriptor.inverse, couplings);
-        auto const from_log_weight =
-            log_boltzmann_weight(from_state, couplings);
-        auto const to_log_weight = log_boltzmann_weight(to_state, couplings);
-        auto const min_log = std::log(std::numeric_limits<long double>::min());
-        auto const max_log = std::log(std::numeric_limits<long double>::max());
-        if (!std::isfinite(from_log_weight) || !std::isfinite(to_log_weight) ||
-            from_log_weight <= min_log || to_log_weight <= min_log ||
-            from_log_weight >= max_log || to_log_weight >= max_log ||
-            forward_q <= 0.0L || reverse_q <= 0.0L ||
-            forward_acceptance <= 0.0L || reverse_acceptance <= 0.0L ||
-            !std::isfinite(forward_acceptance) ||
-            !std::isfinite(reverse_acceptance))
-        {
-          report.passed = false;
-          report.errors.emplace_back(
-              "Detailed-balance transition has non-finite or underflowed "
-              "weight.");
-          continue;
-        }
+          auto const forward_q =
+              proposal_probability(from_state, descriptor.move);
+          auto const reverse_q =
+              proposal_probability(to_state, descriptor.inverse);
+          auto const forward_acceptance = acceptance_probability(
+              from_state, to_state, descriptor.move, couplings);
+          auto const reverse_acceptance = acceptance_probability(
+              to_state, from_state, descriptor.inverse, couplings);
+          auto const from_log_weight =
+              log_boltzmann_weight(from_state, couplings);
+          auto const to_log_weight = log_boltzmann_weight(to_state, couplings);
+          auto const min_log =
+              std::log(std::numeric_limits<long double>::min());
+          auto const max_log =
+              std::log(std::numeric_limits<long double>::max());
+          if (!std::isfinite(from_log_weight) ||
+              !std::isfinite(to_log_weight) || from_log_weight <= min_log ||
+              to_log_weight <= min_log || from_log_weight >= max_log ||
+              to_log_weight >= max_log || forward_q <= 0.0L ||
+              reverse_q <= 0.0L || forward_acceptance <= 0.0L ||
+              reverse_acceptance <= 0.0L ||
+              !std::isfinite(forward_acceptance) ||
+              !std::isfinite(reverse_acceptance))
+          {
+            report.passed = false;
+            report.errors.emplace_back(
+                "Detailed-balance transition has non-finite or underflowed "
+                "weight.");
+            continue;
+          }
 
-        // Both sides use the same Metropolis-Hastings acceptance rule as the
-        // sampler, so this check is an algebraic detailed-balance identity
-        // evaluated in log space to avoid overflow and silent underflow.
-        auto const log_lhs = from_log_weight + std::log(forward_q) +
-                             std::log(forward_acceptance);
-        auto const log_rhs =
-            to_log_weight + std::log(reverse_q) + std::log(reverse_acceptance);
-        if (!std::isfinite(log_lhs) || !std::isfinite(log_rhs))
-        {
-          report.passed = false;
-          report.errors.emplace_back(
-              "Detailed-balance transition has non-finite log weight.");
-          continue;
-        }
-        if (log_lhs <= min_log || log_rhs <= min_log || log_lhs >= max_log ||
-            log_rhs >= max_log)
-        {
-          report.passed = false;
-          report.errors.emplace_back(
-              "Detailed-balance transition weight cannot be represented "
-              "without underflow or overflow.");
-          continue;
-        }
-        auto const residual = std::abs(log_lhs - log_rhs);
-        report.edges.push_back(DetailedBalanceEdge4D{
-            from_hash, to_hash, descriptor.move, std::exp(log_lhs),
-            std::exp(log_rhs), residual});
-        if (residual > tolerance)
-        {
-          report.passed = false;
-          report.errors.emplace_back(
-              "Detailed-balance log residual exceeds tolerance.");
+          // Both sides use the same Metropolis-Hastings acceptance rule as the
+          // sampler, so this check is an algebraic detailed-balance identity
+          // evaluated in log space to avoid overflow and silent underflow.
+          auto const log_lhs = from_log_weight + std::log(forward_q) +
+                               std::log(forward_acceptance);
+          auto const log_rhs = to_log_weight + std::log(reverse_q) +
+                               std::log(reverse_acceptance);
+          if (!std::isfinite(log_lhs) || !std::isfinite(log_rhs))
+          {
+            report.passed = false;
+            report.errors.emplace_back(
+                "Detailed-balance transition has non-finite log weight.");
+            continue;
+          }
+          if (log_lhs <= min_log || log_rhs <= min_log || log_lhs >= max_log ||
+              log_rhs >= max_log)
+          {
+            report.passed = false;
+            report.errors.emplace_back(
+                "Detailed-balance transition weight cannot be represented "
+                "without underflow or overflow.");
+            continue;
+          }
+          auto const residual = std::abs(log_lhs - log_rhs);
+          report.edges.push_back(DetailedBalanceEdge4D{
+              from_hash, to_hash, descriptor.move, std::exp(log_lhs),
+              std::exp(log_rhs), residual});
+          if (residual > tolerance)
+          {
+            report.passed = false;
+            report.errors.emplace_back(
+                "Detailed-balance log residual exceeds tolerance.");
+          }
         }
       }
     }

@@ -2,10 +2,15 @@
 
 This implementation treats `cdt -d4` as a standard-CDT candidate only when the
 state passes the validator in `Foliated_triangulation_4.hpp`. The validator
-requires periodic time, closed `S3` spatial-slice metadata, non-negative simplex
-counts, non-negative proposal multiplicities, valid reciprocal gluing for
-explicit combinatorial simplices, and exact agreement between `N4` and the sum
-of `N41`, `N32`, `N23`, and `N14`.
+requires an explicit persistent vertex/simplex incidence complex, periodic
+time, connected closed `S3` spatial slices, non-negative simplex counts,
+non-negative proposal multiplicities derived from local sites, reciprocal
+gluing for combinatorial simplices, and exact agreement between `N4` and the
+sum of `N41`, `N32`, `N23`, and `N14`.
+
+Count-only 4D states are deliberately rejected as standard CDT candidates. They
+remain useful for validation fixtures and checkpoint compatibility, but the
+production proposal kernel does not infer local moves from aggregate counts.
 
 The action convention follows the usual 4D CDT bare-coupling form
 
@@ -29,18 +34,25 @@ Sources:
 
 ## Move Catalogue
 
-The source of truth is `Move_catalog_4.hpp`. Tests compare directly against this
-table so documentation and runtime behavior cannot silently diverge.
+The source of truth is `Move_catalog_4.hpp`. At present the persistent
+incidence kernel production-enables only the verified `2<->4` pair. The other
+standard 4D Pachner-like CDT move names remain in the public enum for API and
+checkpoint compatibility, but they enumerate zero proposal sites until their
+local subcomplex replacement rules are independently implemented and validated.
 
-| Move | Inverse | Proposal multiplicity | Delta `(N0,N1,N2,N3,N4,N41,N32,N23,N14)` |
+| Move | Inverse | Proposal multiplicity | Invariant delta `(N0,N1,N2,N3,N4)` |
 | --- | --- | --- | --- |
-| `TWO_FOUR` | `FOUR_TWO` | legal spacelike tetrahedra | `(0,+1,+4,+5,+2,+1,+1,0,0)` |
-| `FOUR_TWO` | `TWO_FOUR` | removable timelike edges | `(0,-1,-4,-5,-2,-1,-1,0,0)` |
-| `THREE_THREE` | `THREE_THREE` | legal mixed triangles | `(0,0,0,0,0,0,-1,+1,0)` or the time-reversed sign |
-| `FOUR_SIX` | `SIX_FOUR` | legal mixed triangles | `(0,+1,+3,+4,+2,0,+1,+1,0)` |
-| `SIX_FOUR` | `FOUR_SIX` | removable order-six local stars | `(0,-1,-3,-4,-2,0,-1,-1,0)` |
-| `TWO_EIGHT` | `EIGHT_TWO` | legal spacelike tetrahedra | `(+1,+6,+10,+10,+6,+2,+1,+1,+2)` |
-| `EIGHT_TWO` | `TWO_EIGHT` | removable spatial vertices | `(-1,-6,-10,-10,-6,-2,-1,-1,-2)` |
+| `TWO_FOUR` | `FOUR_TWO` | legal internal tetrahedral facets | `(0,+1,+4,+5,+2)` |
+| `FOUR_TWO` | `TWO_FOUR` | removable order-four causal edges | `(0,-1,-4,-5,-2)` |
+| `THREE_THREE` | `THREE_THREE` | not implemented | `(0,0,0,0,0)` |
+| `FOUR_SIX` | `SIX_FOUR` | not implemented | `(0,0,0,0,0)` |
+| `SIX_FOUR` | `FOUR_SIX` | not implemented | `(0,0,0,0,0)` |
+| `TWO_EIGHT` | `EIGHT_TWO` | not implemented | `(0,0,0,0,0)` |
+| `EIGHT_TWO` | `TWO_EIGHT` | not implemented | `(0,0,0,0,0)` |
+
+The class-resolved simplex-type deltas `N41/N32/N23/N14` are not fixed by the
+move name alone; they are derived from the selected local site and recorded in
+the accepted `MoveApplication`.
 
 ## Detailed Balance
 
@@ -62,9 +74,11 @@ with `pi(T) = exp(-S(T))`.
 
 ## Phase Diagnostics
 
-The single-run summary reports the conservative profile diagnostic for the
-measurements available in that run. A full `c_ds_supported` finite-size claim
-uses `diagnose_c_ds_finite_size()` and requires all of the following:
+The single-run summary reports the conservative profile verdict and the
+measured `cos^3` profile correlation for the measurements available in that
+run. It does not report likelihood, AIC, or BIC values. A full
+`c_ds_supported` finite-size claim uses `diagnose_c_ds_finite_size()` and
+requires all of the following:
 
 - centered ensemble profile is better fit by `cos^3` than collapsed or
   alternating-slice alternatives;

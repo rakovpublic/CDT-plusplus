@@ -32,17 +32,21 @@ namespace
   }
 }  // namespace
 
-TEST_CASE("Abstract 4D periodic seed validates")
+TEST_CASE("Persistent 4D periodic S3xS1 seed validates")
 {
   auto triangulation = FoliatedTriangulation4::periodic_seed(4);
   auto counts        = triangulation.counts();
 
   CHECK(triangulation.periodic());
   CHECK_EQ(triangulation.timeslices(), 4);
+  CHECK_FALSE(triangulation.vertices().empty());
+  CHECK_FALSE(triangulation.simplices().empty());
   CHECK_EQ(triangulation.spatial_topology(), "S3");
   CHECK_EQ(triangulation.spacetime_topology(), "S3xS1");
   CHECK(triangulation.has_closed_s3_slices());
   CHECK(triangulation.is_valid());
+  CHECK_EQ(counts.N0, 20);
+  CHECK_EQ(counts.N4, 80);
   CHECK_EQ(counts.N4, counts.N41 + counts.N32 + counts.N23 + counts.N14);
   CHECK_GT(counts.N41, 0);
   CHECK_GT(counts.N32, 0);
@@ -55,7 +59,7 @@ TEST_CASE("Abstract 4D periodic seed validates")
   }
 }
 
-TEST_CASE("Abstract 4D canonical hash is stable for copies")
+TEST_CASE("Persistent 4D canonical hash tracks local incidence changes")
 {
   auto triangulation = FoliatedTriangulation4::periodic_seed(3);
   auto copy          = triangulation;
@@ -64,69 +68,64 @@ TEST_CASE("Abstract 4D canonical hash is stable for copies")
   auto moved = triangulation;
   REQUIRE(moved.apply_move(move_tracker::MoveType4D::TWO_FOUR));
   CHECK_NE(moved.canonical_hash(), triangulation.canonical_hash());
-  auto const delta = FoliatedTriangulation4::move_count_delta(
-      move_tracker::MoveType4D::TWO_FOUR);
   auto const before_counts = triangulation.counts();
   auto const after_counts  = moved.counts();
-  CHECK_EQ(after_counts.N4, before_counts.N4 + delta.N4);
-  CHECK_EQ(after_counts.N41, before_counts.N41 + delta.N41);
-  CHECK_EQ(after_counts.N32, before_counts.N32 + delta.N32);
+  CHECK_EQ(after_counts.N0, before_counts.N0);
+  CHECK_EQ(after_counts.N1, before_counts.N1 + 1);
+  CHECK_EQ(after_counts.N4, before_counts.N4 + 2);
+  CHECK_FALSE(moved.simplices().empty());
 }
 
-TEST_CASE("4D THREE_THREE toggles direction and is self-inverse")
+TEST_CASE("Unsupported 4D moves are not advertised as local proposals")
 {
   auto triangulation = FoliatedTriangulation4::periodic_seed(3);
-  auto moved         = triangulation;
-  REQUIRE(moved.apply_move(move_tracker::MoveType4D::THREE_THREE));
-  CHECK_NE(moved.three_three_forward(), triangulation.three_three_forward());
-  REQUIRE(moved.apply_move(move_tracker::MoveType4D::THREE_THREE));
-  CHECK_EQ(moved.canonical_hash(), triangulation.canonical_hash());
+  CHECK_EQ(triangulation.candidate_multiplicity(
+               move_tracker::MoveType4D::THREE_THREE),
+           0);
+  CHECK_EQ(
+      triangulation.candidate_multiplicity(move_tracker::MoveType4D::TWO_EIGHT),
+      0);
+  CHECK_FALSE(triangulation.apply_move(move_tracker::MoveType4D::THREE_THREE));
+  CHECK_FALSE(triangulation.apply_move(move_tracker::MoveType4D::TWO_EIGHT));
 }
 
 TEST_CASE("4D time reversal maps profiles and vertex times cyclically")
 {
-  auto       seed          = FoliatedTriangulation4::periodic_seed(4);
-  auto const seed_profile  = FoliatedTriangulation4::Profile{1, 2, 3, 4};
-  auto const seed_vertices = FoliatedTriangulation4::VertexContainer{
-      Vertex4D{1, 0},
-      Vertex4D{2, 1},
-      Vertex4D{3, 2},
-      Vertex4D{4, 3}
-  };
-  auto triangulation = FoliatedTriangulation4::from_checkpoint_state(
-      4, seed.counts(), seed_profile, seed_vertices, {}, true);
-
-  auto       reversed = triangulation.time_reversed();
-  auto const profile  = reversed.spatial_volume_profile();
+  auto       triangulation = FoliatedTriangulation4::periodic_seed(4);
+  auto       reversed      = triangulation.time_reversed();
+  auto const profile       = reversed.spatial_volume_profile();
+  auto const seed_profile  = triangulation.spatial_volume_profile();
   REQUIRE_EQ(profile.size(), 4);
-  CHECK_EQ(profile[0], 1);
-  CHECK_EQ(profile[1], 4);
-  CHECK_EQ(profile[2], 3);
-  CHECK_EQ(profile[3], 2);
-  REQUIRE_EQ(reversed.vertices().size(), 4);
+  CHECK_EQ(profile[0], seed_profile[0]);
+  CHECK_EQ(profile[1], seed_profile[3]);
+  CHECK_EQ(profile[2], seed_profile[2]);
+  CHECK_EQ(profile[3], seed_profile[1]);
+  REQUIRE_EQ(reversed.vertices().size(), triangulation.vertices().size());
   CHECK_EQ(reversed.vertices()[0].time, 0);
-  CHECK_EQ(reversed.vertices()[1].time, 3);
-  CHECK_EQ(reversed.vertices()[2].time, 2);
-  CHECK_EQ(reversed.vertices()[3].time, 1);
+  CHECK_EQ(reversed.vertices()[5].time, 3);
+  CHECK_EQ(reversed.vertices()[10].time, 2);
+  CHECK_EQ(reversed.vertices()[15].time, 1);
   CHECK_FALSE(reversed.three_three_forward());
+  CHECK(reversed.is_valid());
 }
 
 TEST_CASE("4D candidate validation is independent from the initializer")
 {
   auto seeded = FoliatedTriangulation4::periodic_seed(3);
 
-  SUBCASE("count-only states preserve closed periodic S3 metadata")
+  SUBCASE("count-only states are not standard CDT candidates")
   {
     auto from_counts = FoliatedTriangulation4::from_counts_for_validation(
         seeded.timeslices(), seeded.counts(), seeded.spatial_volume_profile());
 
-    CHECK(from_counts.is_valid());
-    CHECK_EQ(from_counts.spatial_topology(), "S3");
-    CHECK_EQ(from_counts.spacetime_topology(), "S3xS1");
-    CHECK_EQ(from_counts.proposal_inventory().spatial_tetrahedra,
-             seeded.proposal_inventory().spatial_tetrahedra);
-    CHECK_EQ(from_counts.proposal_inventory().mixed_triangles,
-             seeded.proposal_inventory().mixed_triangles);
+    auto const report = from_counts.validate();
+    CHECK_FALSE(report.valid());
+    CHECK_FALSE(report.standard_cdt_candidate);
+    CHECK_EQ(from_counts.spatial_topology(), "non-S3");
+    CHECK_EQ(from_counts.spacetime_topology(), "unvalidated");
+    CHECK_EQ(
+        from_counts.candidate_multiplicity(move_tracker::MoveType4D::TWO_FOUR),
+        0);
   }
 
   SUBCASE("count-only constructor clamps timeslices")
@@ -137,32 +136,32 @@ TEST_CASE("4D candidate validation is independent from the initializer")
     CHECK_EQ(clamped.spatial_volume_profile().size(), 2);
   }
 
-  SUBCASE("abstract proposal inventories use aggregate fallback counts")
+  SUBCASE("count-only proposal inventories do not infer local move sites")
   {
     auto counts   = S4Counts{1, 2, 3, 4, 5, 1, 2, 1, 1};
     auto abstract = FoliatedTriangulation4::from_counts_for_validation(
         2, counts, FoliatedTriangulation4::Profile{1, 1});
     auto const inventory = abstract.proposal_inventory();
-    CHECK_EQ(inventory.spatial_tetrahedra, 4);
-    CHECK_EQ(inventory.timelike_edges, 2);
-    CHECK_EQ(inventory.mixed_triangles, 3);
-    CHECK_EQ(inventory.timelike_tetrahedra, 4);
-    CHECK_EQ(inventory.vertices, 1);
-    CHECK_EQ(inventory.three_two_simplices, 2);
-    CHECK_EQ(inventory.two_three_simplices, 1);
+    CHECK_EQ(inventory.spatial_tetrahedra, 0);
+    CHECK_EQ(inventory.timelike_edges, 0);
+    CHECK_EQ(inventory.mixed_triangles, 0);
+    CHECK_EQ(inventory.timelike_tetrahedra, 0);
+    CHECK_EQ(inventory.vertices, 0);
+    CHECK_EQ(inventory.three_two_simplices, 0);
+    CHECK_EQ(inventory.two_three_simplices, 0);
   }
 
-  SUBCASE("complex-derived proposal inventories use class-resolved counts")
+  SUBCASE("class-resolved counts still do not replace local site enumeration")
   {
     auto counts           = S4Counts{1, 2, 3, 4, 5, 1, 2, 1, 1};
     counts.class_resolved = S4ClassResolvedCounts{7, 8, 9, 10};
     auto exact            = FoliatedTriangulation4::from_counts_for_validation(
         2, counts, FoliatedTriangulation4::Profile{1, 1});
     auto const exact_inventory = exact.proposal_inventory();
-    CHECK_EQ(exact_inventory.spatial_tetrahedra, 7);
-    CHECK_EQ(exact_inventory.timelike_edges, 8);
-    CHECK_EQ(exact_inventory.mixed_triangles, 9);
-    CHECK_EQ(exact_inventory.timelike_tetrahedra, 10);
+    CHECK_EQ(exact_inventory.spatial_tetrahedra, 0);
+    CHECK_EQ(exact_inventory.timelike_edges, 0);
+    CHECK_EQ(exact_inventory.mixed_triangles, 0);
+    CHECK_EQ(exact_inventory.timelike_tetrahedra, 0);
   }
 
   SUBCASE("negative spatial profile is reported")
@@ -230,12 +229,12 @@ TEST_CASE("4D candidate validation is independent from the initializer")
             isolated_simplex(1, std::array<VertexId, 5>{1, 2, 3, 4, 5}),
             isolated_simplex(2, std::array<VertexId, 5>{6, 7, 8, 9, 10})},
         true);
-    auto const counts = invalid.counts();
-    CHECK_EQ(counts.N0, 10);
-    CHECK_EQ(counts.N4, 2);
-    CHECK_EQ(counts.N41, 2);
-    REQUIRE(counts.class_resolved.has_value());
-    CHECK_EQ(invalid.proposal_inventory().spatial_tetrahedra, 2);
+    auto const invalid_counts = invalid.counts();
+    CHECK_EQ(invalid_counts.N0, 10);
+    CHECK_EQ(invalid_counts.N4, 2);
+    CHECK_EQ(invalid_counts.N41, 2);
+    REQUIRE(invalid_counts.class_resolved.has_value());
+    CHECK_EQ(invalid.proposal_inventory().spatial_tetrahedra, 0);
 
     auto const report = invalid.validate();
     CHECK_FALSE(report.valid());

@@ -64,9 +64,7 @@ namespace cdt::four_d::phase
   {
     Verdict              verdict{Verdict::no_phase_classification};
     long double          autocorrelation_time{1.0L};
-    long double          held_out_likelihood{0.0L};
-    long double          aic{0.0L};
-    long double          bic{0.0L};
+    long double          cos3_correlation{0.0L};
     Profile              mean_profile;
     std::vector<Profile> covariance;
   };
@@ -74,7 +72,7 @@ namespace cdt::four_d::phase
   struct EffectiveActionEstimate
   {
     std::vector<Profile> covariance;
-    std::vector<Profile> inverse_covariance_diagonal_regularized;
+    std::vector<Profile> inverse_covariance_regularized;
   };
 
   struct FiniteSizeScalingReport
@@ -161,18 +159,80 @@ namespace cdt::four_d::phase
     return result;
   }
 
+  [[nodiscard]] inline auto regularized_inverse_covariance(
+      std::vector<Profile> covariance_matrix,
+      long double const    regularization = 1.0e-9L) -> std::vector<Profile>
+  {
+    auto const size = covariance_matrix.size();
+    if (size == 0) { return {}; }
+    for (auto& row : covariance_matrix)
+    {
+      if (row.size() != size)
+      {
+        throw std::invalid_argument{
+            "regularized_inverse_covariance: matrix must be square."};
+      }
+    }
+
+    std::vector<Profile> inverse(size, Profile(size, 0.0L));
+    for (std::size_t row = 0; row < size; ++row)
+    {
+      covariance_matrix[row][row] += regularization;
+      inverse[row][row] = 1.0L;
+    }
+
+    for (std::size_t column = 0; column < size; ++column)
+    {
+      auto pivot = column;
+      for (std::size_t row = column + 1; row < size; ++row)
+      {
+        if (std::abs(covariance_matrix[row][column]) >
+            std::abs(covariance_matrix[pivot][column]))
+        {
+          pivot = row;
+        }
+      }
+      if (std::abs(covariance_matrix[pivot][column]) <= regularization)
+      {
+        covariance_matrix[pivot][column] =
+            covariance_matrix[pivot][column] < 0.0L ? -regularization
+                                                    : regularization;
+      }
+      if (pivot != column)
+      {
+        std::swap(covariance_matrix[pivot], covariance_matrix[column]);
+        std::swap(inverse[pivot], inverse[column]);
+      }
+
+      auto const pivot_value = covariance_matrix[column][column];
+      for (std::size_t entry = 0; entry < size; ++entry)
+      {
+        covariance_matrix[column][entry] /= pivot_value;
+        inverse[column][entry] /= pivot_value;
+      }
+
+      for (std::size_t row = 0; row < size; ++row)
+      {
+        if (row == column) { continue; }
+        auto const factor = covariance_matrix[row][column];
+        if (factor == 0.0L) { continue; }
+        for (std::size_t entry = 0; entry < size; ++entry)
+        {
+          covariance_matrix[row][entry] -=
+              factor * covariance_matrix[column][entry];
+          inverse[row][entry] -= factor * inverse[column][entry];
+        }
+      }
+    }
+    return inverse;
+  }
+
   [[nodiscard]] inline auto effective_action_kernel(
       std::vector<Profile> const& profiles) -> EffectiveActionEstimate
   {
     auto const profile_mean = mean(profiles);
     auto       cov          = covariance(profiles, profile_mean);
-    auto       inverse      = cov;
-    for (std::size_t i = 0; i < cov.size(); ++i)
-    {
-      for (std::size_t j = 0; j < cov.size(); ++j) { inverse[i][j] = 0.0L; }
-      auto const regularized = cov[i][i] + 1.0e-9L;
-      inverse[i][i]          = 1.0L / regularized;
-    }
+    auto       inverse      = regularized_inverse_covariance(cov);
     return EffectiveActionEstimate{cov, inverse};
   }
 
@@ -442,17 +502,10 @@ namespace cdt::four_d::phase
     auto const reference = cos3_reference(diagnostics.mean_profile.size());
     auto const cos3_corr =
         profile_correlation(diagnostics.mean_profile, reference);
-    // These are heuristic profile-shape scores derived from the cos^3
-    // correlation, not formal likelihood, AIC, or BIC statistics.
-    diagnostics.held_out_likelihood = cos3_corr;
-    diagnostics.aic                 = -2.0L * cos3_corr + 2.0L * 4.0L;
-    diagnostics.bic =
-        -2.0L * cos3_corr +
-        std::log(static_cast<long double>(diagnostics.mean_profile.size())) *
-            4.0L;
-    diagnostics.verdict = cos3_corr > cos3_correlation_limit
-                            ? Verdict::c_ds_supported
-                            : Verdict::no_phase_classification;
+    diagnostics.cos3_correlation = cos3_corr;
+    diagnostics.verdict          = cos3_corr > cos3_correlation_limit
+                                     ? Verdict::c_ds_supported
+                                     : Verdict::no_phase_classification;
     return diagnostics;
   }
 }  // namespace cdt::four_d::phase

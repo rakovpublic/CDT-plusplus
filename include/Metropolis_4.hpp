@@ -3,7 +3,7 @@
 *******************************************************************************/
 
 /// @file Metropolis_4.hpp
-/// @brief Metropolis-Hastings sampler for the abstract 3+1D CDT state.
+/// @brief Metropolis-Hastings sampler for the persistent 3+1D CDT state.
 
 #ifndef CDT_PLUSPLUS_METROPOLIS_4_HPP
 #define CDT_PLUSPLUS_METROPOLIS_4_HPP
@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <expected>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -90,6 +91,14 @@ namespace cdt::four_d
     [[nodiscard]] auto propose_move() -> move_tracker::MoveType4D
     {
       return move_tracker::generate_random_move_4(m_rng);
+    }
+
+    [[nodiscard]] auto propose_site(Int_precision const multiplicity)
+        -> std::size_t
+    {
+      std::uniform_int_distribution<std::size_t> distribution(
+          0, static_cast<std::size_t>(multiplicity - 1));
+      return distribution(m_rng);
     }
 
     [[nodiscard]] auto draw_probability() -> long double
@@ -204,7 +213,13 @@ namespace cdt::four_d
             static_cast<std::size_t>(move_tracker::as_integer(move));
         ++result.move_stats[move_index].attempted;
 
-        auto proposal = moves::apply(result.triangulation, move);
+        auto const forward_candidates =
+            result.triangulation.candidate_multiplicity(move);
+        auto proposal = forward_candidates > 0
+                          ? moves::apply(result.triangulation, move,
+                                         propose_site(forward_candidates))
+                          : moves::ExpectedMove{
+                                std::unexpected("4D move is not applicable.")};
         if (!proposal) { ++result.move_stats[move_index].invalid; }
         else if (draw_probability() <=
                  acceptance_probability(result.triangulation, proposal.value()))

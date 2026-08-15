@@ -268,7 +268,7 @@ namespace cdt::four_d::output
 
       auto const effective_path = run_dir / "effective_action.csv";
       auto       effective_file = open_output_file(effective_path);
-      for (auto const& row : kernel.inverse_covariance_diagonal_regularized)
+      for (auto const& row : kernel.inverse_covariance_regularized)
       {
         for (std::size_t index = 0; index < row.size(); ++index)
         {
@@ -312,10 +312,8 @@ namespace cdt::four_d::output
            << "\",\n";
       file << "  \"autocorrelation_time\": " << diagnostics.autocorrelation_time
            << ",\n";
-      file << "  \"held_out_likelihood\": " << diagnostics.held_out_likelihood
-           << ",\n";
-      file << "  \"aic\": " << diagnostics.aic << ",\n";
-      file << "  \"bic\": " << diagnostics.bic << "\n";
+      file << "  \"cos3_correlation\": " << diagnostics.cos3_correlation
+           << "\n";
       file << "}\n";
       ensure_wrote(file, path);
     }
